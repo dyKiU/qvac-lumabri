@@ -16,7 +16,8 @@ async function json(url, options) {
 
 async function npmLatest(name) {
   const metadata = await json(`https://registry.npmjs.org/${encodeURIComponent(name)}`)
-  return metadata['dist-tags'].latest
+  const version = metadata['dist-tags'].latest
+  return { version, gitHead: metadata.versions[version].gitHead }
 }
 
 function repositorySlug(repository) {
@@ -55,21 +56,19 @@ const actual = {
   colibri: await githubLatest(matrix.repositories.colibri)
 }
 const expected = {
-  qvacSdk: candidate.qvac.sdk,
-  qvacCli: candidate.qvac.cli,
+  qvacSdk: { version: candidate.qvac.sdk, gitHead: candidate.qvac.sdkGitHead },
+  qvacCli: { version: candidate.qvac.cli, gitHead: candidate.qvac.cliGitHead },
   lumabri: candidate.lumabri.releaseBase,
   colibri: candidate.colibri.release
 }
 
 assert.deepEqual(actual, expected, `candidate contract is stale\nexpected ${JSON.stringify(expected)}\nactual   ${JSON.stringify(actual)}`)
-assert.equal(candidate.qvac.release, `sdk-v${candidate.qvac.sdk}`)
+assert.equal(candidate.qvac.sourceRef, candidate.qvac.sdkGitHead)
 
-const [qvacRef, lumabriBaseRef, colibriRef] = await Promise.all([
-  githubTagCommit(matrix.repositories.qvac, candidate.qvac.release),
+const [lumabriBaseRef, colibriRef] = await Promise.all([
   githubTagCommit(matrix.repositories.lumabri, candidate.lumabri.releaseBase),
   githubTagCommit(matrix.repositories.colibri, candidate.colibri.release)
 ])
-assert.equal(candidate.qvac.sourceRef, qvacRef, 'QVAC candidate SHA does not match its release tag')
 assert.equal(candidate.colibri.sourceRef, colibriRef, 'Colibri candidate SHA does not match its release tag')
 const lumabriRelation = await githubRelation(
   matrix.repositories.lumabri,
@@ -77,4 +76,4 @@ const lumabriRelation = await githubRelation(
   candidate.lumabri.sourceRef
 )
 assert(['ahead', 'identical'].includes(lumabriRelation), 'Lumabri candidate is not based on its release')
-process.stdout.write(`Candidate freshness: PASS (${Object.values(actual).join(', ')})\n`)
+process.stdout.write(`Candidate freshness: PASS (${actual.qvacSdk.version}, ${actual.qvacCli.version}, ${actual.lumabri}, ${actual.colibri})\n`)

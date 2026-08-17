@@ -46,6 +46,10 @@ for (const contract of matrix.contracts) {
   assert(matrix.gateway.supported.includes(contract.gatewayProtocol), `${contract.id}: unsupported gateway protocol`)
   assert.equal(contract.lumabri.gatewayPatch, 'native/lumabri-gateway.patch')
   for (const component of ['qvac', 'lumabri', 'colibri']) assertRef(contract, component)
+  if (contract.status !== 'edge') {
+    assert.match(contract.qvac.sdkGitHead, shaPattern, `${contract.id}: missing QVAC SDK gitHead`)
+    assert.match(contract.qvac.cliGitHead, shaPattern, `${contract.id}: missing QVAC CLI gitHead`)
+  }
   assert(Array.isArray(contract.proof) && contract.proof.length > 0, `${contract.id}: missing proof`)
 }
 
@@ -54,6 +58,9 @@ assert(supported.length > 0, 'current release must have a supported contract')
 const primaryContracts = supported.filter((contract) => contract.primary)
 assert.equal(primaryContracts.length, 1, 'current release must have exactly one primary contract')
 const primary = primaryContracts[0]
+const candidate = matrix.contracts.find((contract) => contract.status === 'candidate')
+assert(candidate, 'candidate contract is missing')
+assert.equal(candidate.qvac.sourceRef, candidate.qvac.sdkGitHead)
 const supportedSdkVersions = [...new Set(supported.map((contract) => contract.qvac.sdk))]
 for (const contract of supported) {
   assert.equal(contract.adapter, releaseLine(pkg.version))
