@@ -76,6 +76,15 @@ state between requests, supervises the native process, and supports hard
 cancellation. Tools, attachments, structured output, and per-request sampling
 are not supported in `0.1.x`.
 
+## Multi-node
+
+`createQvacProviderPool()` checks an ordered set of compatible QVAC providers,
+loads on the first healthy coordinator that succeeds, and records the selected
+provider. That coordinator then uses Lumabri to RPC only its routed MoE experts.
+
+See [multi-node QVAC and Lumabri](docs/multi-node.md) for configuration,
+failure boundaries, and the physical-host acceptance test.
+
 ## Verify
 
 ```sh

@@ -8,12 +8,14 @@
     "./client": "./client.js",
     "./plugin": "./plugin.js",
     "./gateway-client": "./lib/gateway-client.js",
-    "./prompt": "./lib/prompt.js"
+    "./prompt": "./lib/prompt.js",
+    "./provider-pool": "./lib/provider-pool.js"
   },
   "files": [
     "client.js",
     "plugin.js",
     "lib/",
+    "docs/",
     "contracts.json",
     "README.md",
     "LICENSE"
@@ -28,7 +30,7 @@
     "check:source": "node scripts/check-source.mjs",
     "docs:contracts": "node scripts/render-contracts.mjs --write",
     "pack:check": "npm pack --dry-run",
-    "test": "node --test test/gateway-client.test.js test/prompt.test.js",
+    "test": "node --test test/gateway-client.test.js test/prompt.test.js test/provider-pool.test.js",
     "test:qvac": "node test/qvac-e2e.mjs",
     "verify:bundle": "node scripts/verify-qvac-bundle.mjs"
   },
