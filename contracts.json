@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "repositories": {
+    "qvac": "https://github.com/tetherto/qvac.git",
+    "lumabri": "https://github.com/JustVugg/lumabri.git",
+    "colibri": "https://github.com/JustVugg/colibri.git"
+  },
+  "runtime": {
+    "node": {
+      "range": ">=20 <23",
+      "tested": ["20", "22"]
+    },
+    "zod": {
+      "range": ">=4.4.3 <5.0.0",
+      "tested": "4.4.3"
+    },
+    "numpy": "2.2.6"
+  },
+  "gateway": {
+    "preferred": 1,
+    "supported": [1]
+  },
+  "contracts": [
+    {
+      "id": "stable-0.1",
+      "status": "supported",
+      "primary": true,
+      "adapter": "0.1.x",
+      "qvac": {
+        "sdk": "0.17.1",
+        "sdkGitHead": "2d1ed8085cf548b5911e19f3c4500aacb53ccf8a",
+        "cli": "0.11.0",
+        "cliGitHead": "4e3c73d447c17a62ac73f86614b8c15ba74cfc8b",
+        "sourceRef": "f63696ac107683dec301ce15c2c11b0a18540d8c",
+        "delegatedPluginRpc": false
+      },
+      "gatewayProtocol": 1,
+      "lumabri": {
+        "baseline": "post-v0.8.0",
+        "sourceRef": "d493fb26d370ea9246a11b6b987b13d1bb84133d",
+        "gatewayPatch": "native/lumabri-gateway.patch"
+      },
+      "colibri": {
+        "release": "v1.4.0",
+        "sourceRef": "b085b48888a88d9a1c00b151a9979774b72cdbfd"
+      },
+      "proof": [
+        "unit",
+        "bundle",
+        "gateway",
+        "native-build",
+        "token-identity"
+      ]
+    },
+    {
+      "id": "dev-next",
+      "status": "candidate",
+      "adapter": "main",
+      "qvac": {
+        "sdk": "0.17.1",
+        "sdkGitHead": "2d1ed8085cf548b5911e19f3c4500aacb53ccf8a",
+        "cli": "0.11.0",
+        "cliGitHead": "4e3c73d447c17a62ac73f86614b8c15ba74cfc8b",
+        "sourceRef": "2d1ed8085cf548b5911e19f3c4500aacb53ccf8a",
+        "delegatedPluginRpc": false
+      },
+      "gatewayProtocol": 1,
+      "lumabri": {
+        "releaseBase": "v0.8.0",
+        "baseline": "post-v0.8.0",
+        "sourceRef": "d493fb26d370ea9246a11b6b987b13d1bb84133d",
+        "gatewayPatch": "native/lumabri-gateway.patch"
+      },
+      "colibri": {
+        "release": "v1.6.2",
+        "sourceRef": "6546cdde7296f28771e2ba1a1d7c1d4b0cb550aa"
+      },
+      "proof": [
+        "bundle",
+        "gateway",
+        "native-build",
+        "token-identity"
+      ]
+    },
+    {
+      "id": "upstream-head",
+      "status": "edge",
+      "adapter": "main",
+      "qvac": {
+        "sdk": "main",
+        "cli": "main",
+        "sourceRef": "main",
+        "delegatedPluginRpc": false
+      },
+      "gatewayProtocol": 1,
+      "lumabri": {
+        "sourceRef": "main",
+        "gatewayPatch": "native/lumabri-gateway.patch"
+      },
+      "colibri": {
+        "sourceRef": "main"
+      },
+      "proof": [
+        "bundle",
+        "gateway",
+        "native-build",
+        "token-identity"
+      ]
+    }
+  ]
+}

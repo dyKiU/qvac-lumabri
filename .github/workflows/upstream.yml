@@ -13,26 +13,61 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lumabri-colibri-head:
-    name: Lumabri + Colibri main
+  contracts:
+    name: Resolve canary contracts
+    runs-on: ubuntu-latest
+    outputs:
+      canaries: ${{ steps.matrix.outputs.canaries }}
+      numpy: ${{ steps.matrix.outputs.numpy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - run: npm run check:contracts
+      - id: matrix
+        shell: bash
+        run: |
+          echo "canaries=$(node scripts/list-contracts.mjs candidate edge)" >> "$GITHUB_OUTPUT"
+          echo "numpy=$(node -p "require('./contracts.json').runtime.numpy")" >> "$GITHUB_OUTPUT"
+
+  candidate-freshness:
+    name: Candidate release freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - run: npm run check:freshness
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  lumabri-colibri:
+    name: Lumabri + Colibri / ${{ matrix.contract.id }}
+    needs: contracts
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        contract: ${{ fromJSON(needs.contracts.outputs.canaries) }}
     steps:
       - name: Checkout adapter
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: adapter
-      - name: Checkout Lumabri main
+      - name: Checkout Lumabri contract
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: JustVugg/lumabri
-          ref: main
+          ref: ${{ matrix.contract.lumabri.sourceRef }}
           path: upstream/lumabri
-      - name: Checkout Colibri main
+      - name: Checkout Colibri contract
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: JustVugg/colibri
-          ref: main
+          ref: ${{ matrix.contract.colibri.sourceRef }}
           path: upstream/colibri
       - run: adapter/scripts/apply-lumabri-gateway.sh upstream/lumabri
       - run: make -C upstream/lumabri lumabri liblumabri.so colibri_p2p expert_node_glm ENGINE=../colibri/c
@@ -40,25 +75,29 @@ jobs:
       - name: Prove local and RPC expert outputs match
         shell: bash
         run: |
-          numpy_version=$(python3 -c 'import json; print(json.load(open("adapter/compatibility.json"))["verification"]["numpy"])')
           python3 -m venv .verification-venv
-          .verification-venv/bin/pip install --disable-pip-version-check "numpy==$numpy_version"
+          .verification-venv/bin/pip install --disable-pip-version-check numpy==${{ needs.contracts.outputs.numpy }}
           PATH="$PWD/.verification-venv/bin:$PATH" make -C upstream/lumabri test-phase2 ENGINE=../colibri/c
 
-  qvac-head:
-    name: QVAC SDK main
+  qvac:
+    name: QVAC SDK / ${{ matrix.contract.id }}
+    needs: contracts
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        contract: ${{ fromJSON(needs.contracts.outputs.canaries) }}
     steps:
       - name: Checkout adapter
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: adapter
-      - name: Checkout QVAC main
+      - name: Checkout QVAC contract
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: tetherto/qvac
-          ref: main
+          ref: ${{ matrix.contract.qvac.sourceRef }}
           path: upstream/qvac
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:

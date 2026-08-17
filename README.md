@@ -59,24 +59,38 @@ Use `model` plus `tracker` instead of `localDir` for a Lumabri swarm model.
 
 ## Compatibility
 
-| Surface | Supported / pinned |
-|---|---|
-| Node.js | `>=20 <23` |
-| QVAC SDK | `>=0.17.1 <0.18.0`; tested `0.17.1` |
-| QVAC CLI | tested `0.11.0` |
-| Zod | `>=4.4.3 <5.0.0`; tested `4.4.3` |
-| Gateway protocol | `v1` NDJSON + base64 chunks |
-| Lumabri / Colibri | exact refs in [`compatibility.json`](compatibility.json) |
+<!-- contracts:start -->
+| Line | Status | Adapter | QVAC SDK / CLI | Gateway | Lumabri | Colibri |
+|---|---|---|---|---|---|---|
+| stable-0.1 | supported | 0.1.x | 0.17.1 / 0.11.0 | v1 | `post-v0.8.0 @ d493fb2` | `v1.4.0 @ b085b48` |
+| dev-next | candidate | main | 0.17.1 / 0.11.0 | v1 | `post-v0.8.0 @ d493fb2` | `v1.6.2 @ 6546cdd` |
+| upstream-head | edge | main | main / main | v1 | `main` | `main` |
+<!-- contracts:end -->
+
+[`contracts.json`](contracts.json) is the source of truth. Supported contracts
+gate releases; pinned candidates and upstream heads run as weekly canaries.
+Node.js is `>=20 <23`; Zod is `>=4.4.3 <5.0.0`.
 
 The adapter streams text and stats, serializes same-model requests, resets KV
-state between requests, supervises the native process, and supports hard
-cancellation. Tools, attachments, structured output, and per-request sampling
-are not supported in `0.1.x`.
+state between requests, and supervises the native process. Hard cancellation
+and status RPC are local-load features: QVAC `0.17.1` does not delegate custom
+plugin RPC. Tools, attachments, structured output, and per-request sampling are
+not supported in `0.1.x`.
+
+## Multi-node
+
+`createQvacProviderPool()` checks an ordered set of compatible QVAC providers,
+loads on the first healthy coordinator that succeeds, and records the selected
+provider. That coordinator then uses Lumabri to RPC only its routed MoE experts.
+
+See [multi-node QVAC and Lumabri](docs/multi-node.md) for configuration,
+failure boundaries, and the physical-host acceptance test.
 
 ## Verify
 
 ```sh
 npm run check          # source, constraints, unit tests
+npm run check:freshness # compare candidate pins with latest releases
 npm run pack:check     # publish surface
 npm run bundle         # real QVAC Bare worker
 npm run test:qvac      # QVAC -> adapter -> fake gateway

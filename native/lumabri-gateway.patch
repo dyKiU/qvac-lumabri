@@ -12,7 +12,7 @@ index 98d109b..93f734b 100644
   *
   * `serve` runs the tracker and a maintainer for the given directory.
   * `chat` asks the tracker what is available, mounts the chosen model through
-@@ -24,6 +25,7 @@
+@@ -24,15 +25,23 @@
   * where mirroring would mean a second copy of the same bytes.
   */
  #define _GNU_SOURCE
@@ -20,7 +20,12 @@ index 98d109b..93f734b 100644
  #include <fcntl.h>
  #include <math.h>
  #include <pthread.h>
-@@ -35,6 +37,12 @@
+ #include <signal.h>
+ #include <stdint.h>
+ #include <sys/ioctl.h>
++#include <sys/resource.h>
+ #include <sys/stat.h>
+ #include <sys/statvfs.h>
  #include <sys/wait.h>
  #include <time.h>
 
@@ -31,9 +36,7 @@ index 98d109b..93f734b 100644
 +#endif
 +
  #include "lumabri_proto.h"
- #include "lumabri_sign.h"
- #include "lumabri_secure.h"
-@@ -780,9 +788,21 @@ static int engine_wait_ready(Engine *e) {
+@@ -780,9 +789,21 @@ static int engine_wait_ready(Engine *e) {
      }
  }
 
@@ -58,7 +61,7 @@ index 98d109b..93f734b 100644
      const char *S = FRAME_END;
      size_t SL = strlen(S), cap = 8192, len = 0, shown = 0;
      char *buf = malloc(cap), *hit = NULL;
-@@ -803,8 +823,10 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -803,8 +824,10 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
          /* hold back SL-1 bytes: a sentinel may straddle two reads */
          size_t safe = hit ? (size_t)(hit - buf) : (len > SL ? len - SL : 0);
          if (safe > shown) {
@@ -71,7 +74,7 @@ index 98d109b..93f734b 100644
              shown = safe;
          }
          if (hit) break;
-@@ -830,6 +852,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -830,6 +853,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
      }
  }
 
@@ -83,7 +86,7 @@ index 98d109b..93f734b 100644
  static const char *engine_for(const char *model_type) {
      if (strstr(model_type, "olmoe")) return "olmoe";
      if (strstr(model_type, "deepseek")) return "deepseek";
-@@ -912,7 +939,15 @@ static int engine_spawn(const char *engine, const char *shim, const char *tracke
+@@ -912,7 +940,15 @@ static int engine_spawn(const char *engine, const char *shim, const char *tracke
  /* Why the child is gone, in the words of the kernel and of the child. */
  static void engine_diag(Engine *e, int booting) {
      int st = 0;
@@ -100,7 +103,7 @@ index 98d109b..93f734b 100644
          e->pid = 0;
          if (WIFSIGNALED(st)) {
              int s = WTERMSIG(st);
-@@ -1699,6 +1734,405 @@ static int cmd_chat(int argc, char **argv) {
+@@ -1699,6 +1735,420 @@ static int cmd_chat(int argc, char **argv) {
      return 0;
  }
 
@@ -119,6 +122,20 @@ index 98d109b..93f734b 100644
 +
 +#define GATEWAY_LINE_MAX (2U * 1024U * 1024U)
 +#define GATEWAY_PROMPT_MAX (1024U * 1024U)
++#define GATEWAY_NOFILE_TARGET ((rlim_t)4096)
++
++/* Large sharded models can exceed macOS's default soft limit of 256 files.
++ * Raise only the soft limit, never beyond the operator-controlled hard cap. */
++static void gateway_raise_nofile(void) {
++    struct rlimit limit;
++    if (getrlimit(RLIMIT_NOFILE, &limit) ||
++        limit.rlim_cur >= GATEWAY_NOFILE_TARGET) return;
++    limit.rlim_cur = limit.rlim_max < GATEWAY_NOFILE_TARGET
++        ? limit.rlim_max : GATEWAY_NOFILE_TARGET;
++    if (setrlimit(RLIMIT_NOFILE, &limit))
++        fprintf(stderr, "lumabri gateway: cannot raise open-file limit: %s\n",
++                strerror(errno));
++}
 +
 +typedef struct {
 +    const char *tracker;
@@ -446,6 +463,7 @@ index 98d109b..93f734b 100644
 +
 +    signal(SIGINT, gateway_signal);
 +    signal(SIGTERM, gateway_signal);
++    gateway_raise_nofile();
 +    Engine e = {0};
 +    if (gateway_boot_engine(&c, &e)) return 1;
 +    fputs("{\"v\":1,\"type\":\"ready\",\"protocol\":", stdout);
@@ -506,7 +524,7 @@ index 98d109b..93f734b 100644
  /* ---- key: the operator's identity ---------------------------------------
   * Ed25519 keypair. The secret signs the swarm's ground truth and belongs
   * only on the machine that owns the model — ideally offline, since the
-@@ -1776,6 +2210,8 @@ int main(int argc, char **argv) {
+@@ -1776,6 +2226,8 @@ int main(int argc, char **argv) {
      }
      if (argc >= 2 && !strcmp(argv[1], "serve")) return cmd_serve(argc - 2, argv + 2);
      if (argc >= 2 && !strcmp(argv[1], "chat"))  return cmd_chat(argc - 2, argv + 2);
@@ -515,7 +533,7 @@ index 98d109b..93f734b 100644
      /* No arguments and a terminal: this is a person, not a script. Chat is
       * the only thing a person wants by default, and everything it needs is
       * either remembered or asked for in the panel. */
-@@ -1786,6 +2222,7 @@ int main(int argc, char **argv) {
+@@ -1786,6 +2238,7 @@ int main(int argc, char **argv) {
          "  lumabri peer-key                                           print this machine's endpoint identity\n"
          "  lumabri serve --model DIR [--port 7300] [--join TRACKER]   share a model\n"
          "  lumabri chat  [--tracker HOST:7300] [--model NAME]         chat with it\n"
@@ -528,7 +546,7 @@ new file mode 100755
 index 0000000..176cca1
 --- /dev/null
 +++ b/gateway_test.sh
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,77 @@
 +#!/usr/bin/env bash
 +# Machine gateway contract without a real model: both engine dialects,
 +# streamed binary-safe deltas, reset-before-generate, stats, and rejection of
@@ -538,12 +556,15 @@ index 0000000..176cca1
 +
 +make -s lumabri
 +T=$(mktemp -d "${TMPDIR:-.}/lumabri-gateway.XXXXXX")
-+trap 'rm -rf "$T"' EXIT
++cleanup() { perl -MFile::Path=remove_tree -e 'remove_tree($ARGV[0])' "$T"; }
++trap cleanup EXIT
 +mkdir -p "$T/model"
 +printf '{"model_type":"fake"}' > "$T/model/config.json"
++export GATEWAY_TEST_NOFILE="$T/nofile"
 +
 +cat > "$T/framed" <<'EOF'
 +#!/usr/bin/env bash
++ulimit -S -n > "${GATEWAY_TEST_NOFILE:?}"
 +printf '\x01\x01READY\x01\x01\nSTAT 0 0.0 0.0 0.0\n'
 +while IFS= read -r line; do
 +    if [ "$line" = $'\x02RESET' ]; then
@@ -568,11 +589,14 @@ index 0000000..176cca1
 +
 +run_case() {
 +    local engine=$1 expected=$2 output=$3
-+    {
-+        printf '%s\n' '{"v":1,"id":"one","op":"generate","prompt":"aGVsbG8gd29ybGQ="}'
-+        printf '%s\n' '{"v":1,"id":"bad","op":"generate","prompt":"YmFkCnByb21wdA=="}'
-+        printf '%s\n' '{"v":1,"id":"stop","op":"shutdown"}'
-+    } | ./lumabri gateway --local "$T/model" --engine "$engine" > "$output"
++    (
++        ulimit -S -n 64
++        {
++            printf '%s\n' '{"v":1,"id":"one","op":"generate","prompt":"aGVsbG8gd29ybGQ="}'
++            printf '%s\n' '{"v":1,"id":"bad","op":"generate","prompt":"YmFkCnByb21wdA=="}'
++            printf '%s\n' '{"v":1,"id":"stop","op":"shutdown"}'
++        } | ./lumabri gateway --local "$T/model" --engine "$engine" > "$output"
++    )
 +
 +    python3 - "$output" "$expected" <<'PY'
 +import base64, json, sys
@@ -594,10 +618,10 @@ index 0000000..176cca1
 +
 +echo "· framed gateway"
 +run_case "$T/framed" "framed: hello world 🦜" "$T/framed.out"
++test "$(cat "$GATEWAY_TEST_NOFILE")" -gt 64
 +echo "  ✓ streamed delta, stats, isolation, validation"
 +
 +echo "· line gateway"
 +run_case "$T/line" "line: hello world 🦜" "$T/line.out"
 +echo "  ✓ prompt dialect and reset-before-generate"
-+
 +echo "LUMABRI GATEWAY TEST: PASS"

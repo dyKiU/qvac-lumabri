@@ -8,25 +8,33 @@
     "./client": "./client.js",
     "./plugin": "./plugin.js",
     "./gateway-client": "./lib/gateway-client.js",
-    "./prompt": "./lib/prompt.js"
+    "./prompt": "./lib/prompt.js",
+    "./provider-pool": "./lib/provider-pool.js"
   },
   "files": [
     "client.js",
     "plugin.js",
     "lib/",
+    "docs/",
+    "contracts.json",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "bundle": "node scripts/bundle.mjs",
     "bundle:cli": "node node_modules/@qvac/cli/dist/index.js bundle sdk",
-    "check": "npm run check:source && npm run check:compat && npm run check:hygiene && npm test",
-    "check:compat": "node scripts/check-compatibility.mjs",
+    "check": "npm run check:source && npm run check:contracts && npm run check:hygiene && npm test",
+    "check:contracts": "node scripts/check-contracts.mjs && node scripts/render-contracts.mjs --check",
+    "check:freshness": "node scripts/check-contract-freshness.mjs",
     "check:hygiene": "node scripts/check-release-hygiene.mjs",
     "check:source": "node scripts/check-source.mjs",
+    "docs:contracts": "node scripts/render-contracts.mjs --write",
     "pack:check": "npm pack --dry-run",
-    "test": "node --test test/gateway-client.test.js test/prompt.test.js",
+    "test": "node --test test/gateway-client.test.js test/prompt.test.js test/provider-pool.test.js",
     "test:qvac": "node test/qvac-e2e.mjs",
+    "test:qvac:ssh": "node test/qvac-ssh-e2e.mjs",
+    "test:physical": "node test/physical-provider-e2e.mjs",
+    "test:physical:provider": "node test/physical-provider-host.mjs",
     "verify:bundle": "node scripts/verify-qvac-bundle.mjs"
   },
   "engines": {
@@ -36,13 +44,16 @@
     "bare-subprocess": "^6.1.0"
   },
   "peerDependencies": {
-    "@qvac/sdk": ">=0.17.1 <0.18.0",
+    "@qvac/sdk": "0.17.1",
     "zod": ">=4.4.3 <5.0.0"
   },
   "devDependencies": {
     "@qvac/cli": "0.11.0",
     "@qvac/sdk": "0.17.1",
     "zod": "4.4.3"
+  },
+  "overrides": {
+    "@fastify/static": "10.1.2"
   },
   "keywords": [
     "qvac",
