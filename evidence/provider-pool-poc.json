@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-08-17",
+  "adapter": {
+    "branch": "agent/qvac-provider-pool",
+    "implementationCommit": "007abbdcea63b20bbc31b0faae8778702c7c862d",
+    "contractId": "stable-0.1",
+    "gatewayProtocolVersion": 1
+  },
+  "sources": {
+    "qvacSdk": "0.17.1",
+    "qvacSourceRef": "f63696ac107683dec301ce15c2c11b0a18540d8c",
+    "lumabriSourceRef": "d493fb26d370ea9246a11b6b987b13d1bb84133d",
+    "colibriSourceRef": "b085b48888a88d9a1c00b151a9979774b72cdbfd"
+  },
+  "verification": {
+    "local": {
+      "sourceChecks": "pass",
+      "contractMatrix": "pass",
+      "releaseHygiene": "pass",
+      "unitTests": {
+        "status": "pass",
+        "count": 25
+      },
+      "qvacBundle": "pass",
+      "qvacAdapterE2e": "pass",
+      "qvacSshTransportE2e": "pass",
+      "packageSurface": "pass"
+    },
+    "githubBaseCommit": {
+      "commit": "868c8eefaa978e5260f89ea14db8879d017e8c0b",
+      "status": "pass",
+      "checks": [
+        "continuous-integration",
+        "code-scanning",
+        "gateway-rpc-expert-equivalence"
+      ]
+    },
+    "nativeBuilds": {
+      "linux": "pass",
+      "macos": "pass"
+    },
+    "expertRpcEquivalence": {
+      "status": "pass",
+      "method": "local-versus-rpc token identity in CI"
+    },
+    "directLargeModelGateway": {
+      "status": "pass",
+      "modelSizeGiB": 400,
+      "shards": 142,
+      "layers": 78,
+      "experts": 256,
+      "topK": 8,
+      "outputBytes": 4,
+      "outputSha256": "339561b4aa48c09db9c3c16c4177af69dadcde52d2ec5dabf2810c2975bece7f",
+      "generatedTokens": 2,
+      "tokensPerSecond": 0.01,
+      "generationSeconds": 229.566429,
+      "residentGiB": 10.29,
+      "wallSeconds": 261.87
+    },
+    "providerHeartbeat": {
+      "status": "pass",
+      "availableProviders": 1,
+      "elapsedMs": 4567
+    },
+    "physicalProviderFailover": {
+      "status": "pass",
+      "configuredProviders": 2,
+      "selectedProviderIndex": 1,
+      "gatewayProtocolVersion": 1,
+      "modelFingerprint": "22e49334abf8562fecf70ca3292ba3f5b33f5602fb2bf10b52dd64a66cfe65ff",
+      "promptSha256": "4ac771bab6500c2f3efe55e56b512729a729846f11bb701ba99395c711ca05bf",
+      "outputSha256": "66a045b452102c59d840ec097d59d9467e13a3f34f6494e539ffd32c1bb35f18",
+      "outputBytes": 6,
+      "loadMs": 6227,
+      "timeToFirstTokenMs": 268832,
+      "totalGenerationMs": 268837,
+      "generatedTokens": 1,
+      "tokensPerSecond": 0,
+      "cleanUnload": true
+    }
+  },
+  "privateTransport": {
+    "controlPlane": "headscale",
+    "dataPlane": "direct peer-to-peer",
+    "providerMode": "userspace-networking",
+    "hostKeyPinned": true,
+    "sourceRestrictedKey": true,
+    "forcedGatewayCommand": true,
+    "portForwardingDisabled": true,
+    "rejectedGeneralCommand": true,
+    "allowedGatewayProtocolProbe": "pass"
+  },
+  "constraints": [
+    {
+      "id": "qvac-delegated-plugin-rpc",
+      "status": "unsupported",
+      "impact": "Custom status and hard-cancel plugin RPC are local-load features in QVAC 0.17.1."
+    },
+    {
+      "id": "physical-expert-donor",
+      "status": "not-run",
+      "reason": "The provider host has 16 GiB free, below the checkpoint requirement.",
+      "coverage": "CI proves local and RPC expert token identity."
+    },
+    {
+      "id": "macos-external-model-volume",
+      "status": "mitigated",
+      "impact": "A custom SSH daemon stalled on the external model volume; the system SSH service completed the same forced command."
+    }
+  ]
+}
