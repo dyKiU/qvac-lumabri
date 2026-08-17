@@ -25,7 +25,7 @@
     "check:hygiene": "node scripts/check-release-hygiene.mjs",
     "check:source": "node scripts/check-source.mjs",
     "pack:check": "npm pack --dry-run",
-    "test": "node --test test/*.test.js",
+    "test": "node --test",
     "test:qvac": "node test/qvac-e2e.mjs",
     "verify:bundle": "node scripts/verify-qvac-bundle.mjs"
   },
