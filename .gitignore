@@ -1,0 +1,9 @@
+node_modules/
+qvac/
+.upstream/
+.cache/
+.verification-venv/
+coverage/
+*.tgz
+*.log
+.DS_Store

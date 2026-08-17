@@ -1,0 +1,603 @@
+diff --git a/lumabri.c b/lumabri.c
+index 98d109b..93f734b 100644
+--- a/lumabri.c
++++ b/lumabri.c
+@@ -1,7 +1,8 @@
+-/* lumabri.c — the lumabri front end: one binary, two roles.
++/* lumabri.c — the lumabri front end: one binary, three roles.
+  *
+  *   lumabri serve --model DIR      share a model with the swarm
+  *   lumabri chat                   chat with a model that lives on the swarm
++ *   lumabri gateway                expose chat as an NDJSON process protocol
+  *
+  * `serve` runs the tracker and a maintainer for the given directory.
+  * `chat` asks the tracker what is available, mounts the chosen model through
+@@ -24,6 +25,7 @@
+  * where mirroring would mean a second copy of the same bytes.
+  */
+ #define _GNU_SOURCE
++#include <errno.h>
+ #include <fcntl.h>
+ #include <math.h>
+ #include <pthread.h>
+@@ -35,6 +37,12 @@
+ #include <sys/wait.h>
+ #include <time.h>
+
++/* Linux has a distinct key-rejection errno; macOS does not. Keep the
++ * security path buildable there while preserving the native value on Linux. */
++#ifndef EKEYREJECTED
++#define EKEYREJECTED EACCES
++#endif
++
+ #include "lumabri_proto.h"
+ #include "lumabri_sign.h"
+ #include "lumabri_secure.h"
+@@ -780,9 +788,21 @@ static int engine_wait_ready(Engine *e) {
+     }
+ }
+
+-/* Framed turn: print the tokens as they arrive, stop at the END sentinel,
+- * then pick up the STAT line that follows it. */
+-static int stream_until_end(Engine *e, char *statline, size_t scap) {
++typedef int (*EngineChunkFn)(const void *data, size_t len, void *arg);
++
++static int stdout_chunk(const void *data, size_t len, void *arg) {
++    (void)arg;
++    if (fwrite(data, 1, len, stdout) != len) return -1;
++    fflush(stdout);
++    return 0;
++}
++
++/* Framed turn: pass tokens to a sink as they arrive, stop at the END
++ * sentinel, then pick up the STAT line that follows it. Keeping framing in
++ * one place matters: both the human chat UI and machine gateway must make
++ * exactly the same decisions around a sentinel split across reads. */
++static int stream_until_end_to(Engine *e, char *statline, size_t scap,
++                               EngineChunkFn sink, void *arg) {
+     const char *S = FRAME_END;
+     size_t SL = strlen(S), cap = 8192, len = 0, shown = 0;
+     char *buf = malloc(cap), *hit = NULL;
+@@ -803,8 +823,10 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+         /* hold back SL-1 bytes: a sentinel may straddle two reads */
+         size_t safe = hit ? (size_t)(hit - buf) : (len > SL ? len - SL : 0);
+         if (safe > shown) {
+-            fwrite(buf + shown, 1, safe - shown, stdout);
+-            fflush(stdout);
++            if (sink && sink(buf + shown, safe - shown, arg)) {
++                free(buf);
++                return -1;
++            }
+             shown = safe;
+         }
+         if (hit) break;
+@@ -830,6 +852,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+     }
+ }
+
++/* The terminal UI's original behavior, now a thin sink wrapper. */
++static int stream_until_end(Engine *e, char *statline, size_t scap) {
++    return stream_until_end_to(e, statline, scap, stdout_chunk, NULL);
++}
++
+ static const char *engine_for(const char *model_type) {
+     if (strstr(model_type, "olmoe")) return "olmoe";
+     if (strstr(model_type, "deepseek")) return "deepseek";
+@@ -912,7 +939,15 @@ static int engine_spawn(const char *engine, const char *shim, const char *tracke
+ /* Why the child is gone, in the words of the kernel and of the child. */
+ static void engine_diag(Engine *e, int booting) {
+     int st = 0;
+-    if (e->pid > 0 && waitpid(e->pid, &st, WNOHANG) == e->pid) {
++    pid_t waited = e->pid > 0 ? waitpid(e->pid, &st, WNOHANG) : -1;
++    /* EOF on the child's stdout can win the scheduler race with process
++     * reaping (especially on macOS). Give the kernel a bounded moment to
++     * publish the exit status so diagnostics retain the real code. */
++    for (int i = 0; booting && waited == 0 && i < 50; i++) {
++        usleep(10 * 1000);
++        waited = waitpid(e->pid, &st, WNOHANG);
++    }
++    if (e->pid > 0 && waited == e->pid) {
+         e->pid = 0;
+         if (WIFSIGNALED(st)) {
+             int s = WTERMSIG(st);
+@@ -1699,6 +1734,405 @@ static int cmd_chat(int argc, char **argv) {
+     return 0;
+ }
+
++/* ---- gateway: a process boundary for QVAC and other hosts --------------
++ *
++ * stdout is NDJSON and nothing else. Binary prompt/reply data is base64 so
++ * an engine read that splits a UTF-8 code point cannot create invalid JSON.
++ * One generate is active at a time, matching the one KV slot configured in
++ * engine_spawn. Each request resets the engine first: callers send complete
++ * rendered history and never inherit another session's cache accidentally.
++ *
++ * request:  {"v":1,"id":"1","op":"generate","prompt":"<base64>"}
++ * response: {"v":1,"id":"1","type":"delta","data":"<base64>"}
++ *           {"v":1,"id":"1","type":"done","stats":{...}}
++ */
++
++#define GATEWAY_LINE_MAX (2U * 1024U * 1024U)
++#define GATEWAY_PROMPT_MAX (1024U * 1024U)
++
++typedef struct {
++    const char *tracker;
++    const char *model_arg;
++    const char *local_dir;
++    const char *engine_path;
++    const char *engines_dir;
++    int ctx, max_new, cap_experts;
++    char model[64];
++    char engine[1200];
++    char shim[1200];
++} GatewayCfg;
++
++static volatile sig_atomic_t g_gateway_engine_pid = 0;
++
++static void gateway_signal(int sig) {
++    sig_atomic_t pid = g_gateway_engine_pid;
++    if (pid > 0) kill((pid_t)pid, SIGTERM);
++    _exit(128 + sig);
++}
++
++static int write_full(int fd, const void *data, size_t len) {
++    const unsigned char *p = data;
++    while (len) {
++        ssize_t n = write(fd, p, len);
++        if (n < 0 && errno == EINTR) continue;
++        if (n <= 0) return -1;
++        p += (size_t)n;
++        len -= (size_t)n;
++    }
++    return 0;
++}
++
++static void json_string(FILE *out, const char *s) {
++    fputc('"', out);
++    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
++        switch (*p) {
++        case '"': fputs("\\\"", out); break;
++        case '\\': fputs("\\\\", out); break;
++        case '\b': fputs("\\b", out); break;
++        case '\f': fputs("\\f", out); break;
++        case '\n': fputs("\\n", out); break;
++        case '\r': fputs("\\r", out); break;
++        case '\t': fputs("\\t", out); break;
++        default:
++            if (*p < 0x20) fprintf(out, "\\u%04x", (unsigned)*p);
++            else fputc(*p, out);
++        }
++    }
++    fputc('"', out);
++}
++
++/* Gateway-produced ids/op/base64 are deliberately ASCII without escapes.
++ * This parser rejects escapes rather than silently interpreting a different
++ * request. It is sufficient for JSON.stringify output from the adapter. */
++static int json_ascii_field(const char *line, const char *key,
++                            char *out, size_t cap) {
++    char needle[80];
++    if (snprintf(needle, sizeof needle, "\"%s\"", key) >= (int)sizeof needle)
++        return -1;
++    const char *p = strstr(line, needle);
++    if (!p) return -1;
++    p += strlen(needle);
++    while (*p == ' ' || *p == '\t') p++;
++    if (*p++ != ':') return -1;
++    while (*p == ' ' || *p == '\t') p++;
++    if (*p++ != '"') return -1;
++    size_t n = 0;
++    while (*p && *p != '"') {
++        unsigned char c = (unsigned char)*p++;
++        if (c < 0x20 || c >= 0x7f || c == '\\' || n + 1 >= cap) return -1;
++        out[n++] = (char)c;
++    }
++    if (*p != '"') return -1;
++    out[n] = 0;
++    return 0;
++}
++
++static int json_int_field(const char *line, const char *key, long *out) {
++    char needle[80];
++    if (snprintf(needle, sizeof needle, "\"%s\"", key) >= (int)sizeof needle)
++        return -1;
++    const char *p = strstr(line, needle);
++    if (!p) return -1;
++    p += strlen(needle);
++    while (*p == ' ' || *p == '\t') p++;
++    if (*p++ != ':') return -1;
++    while (*p == ' ' || *p == '\t') p++;
++    char *end = NULL;
++    errno = 0;
++    long value = strtol(p, &end, 10);
++    if (errno || end == p || (*end != ',' && *end != '}' && *end != ' ' && *end != '\t'))
++        return -1;
++    *out = value;
++    return 0;
++}
++
++static int gateway_id_ok(const char *id) {
++    size_t n = strlen(id);
++    if (!n || n > 128) return 0;
++    for (size_t i = 0; i < n; i++) {
++        unsigned char c = (unsigned char)id[i];
++        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
++              (c >= '0' && c <= '9') || c == '-' || c == '_' ||
++              c == '.' || c == ':')) return 0;
++    }
++    return 1;
++}
++
++static const char B64[] =
++    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
++
++static char *base64_encode(const void *data, size_t len) {
++    const unsigned char *p = data;
++    size_t cap = 4 * ((len + 2) / 3) + 1, o = 0;
++    char *out = malloc(cap);
++    if (!out) return NULL;
++    for (size_t i = 0; i < len; i += 3) {
++        uint32_t v = (uint32_t)p[i] << 16;
++        int have2 = i + 1 < len, have3 = i + 2 < len;
++        if (have2) v |= (uint32_t)p[i + 1] << 8;
++        if (have3) v |= p[i + 2];
++        out[o++] = B64[(v >> 18) & 63];
++        out[o++] = B64[(v >> 12) & 63];
++        out[o++] = have2 ? B64[(v >> 6) & 63] : '=';
++        out[o++] = have3 ? B64[v & 63] : '=';
++    }
++    out[o] = 0;
++    return out;
++}
++
++static int b64_value(unsigned char c) {
++    if (c >= 'A' && c <= 'Z') return c - 'A';
++    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
++    if (c >= '0' && c <= '9') return c - '0' + 52;
++    if (c == '+') return 62;
++    if (c == '/') return 63;
++    return -1;
++}
++
++static unsigned char *base64_decode(const char *src, size_t *out_len) {
++    size_t n = strlen(src), o = 0;
++    if ((n & 3) || n > 4 * ((GATEWAY_PROMPT_MAX + 2) / 3)) return NULL;
++    unsigned char *out = malloc(n / 4 * 3 + 1);
++    if (!out) return NULL;
++    for (size_t i = 0; i < n; i += 4) {
++        int a = b64_value((unsigned char)src[i]);
++        int b = b64_value((unsigned char)src[i + 1]);
++        int c = src[i + 2] == '=' ? -2 : b64_value((unsigned char)src[i + 2]);
++        int d = src[i + 3] == '=' ? -2 : b64_value((unsigned char)src[i + 3]);
++        int last = i + 4 == n;
++        if (a < 0 || b < 0 || c == -1 || d == -1 ||
++            (c == -2 && d != -2) || ((c == -2 || d == -2) && !last)) {
++            free(out); return NULL;
++        }
++        uint32_t v = (uint32_t)a << 18 | (uint32_t)b << 12;
++        if (c >= 0) v |= (uint32_t)c << 6;
++        if (d >= 0) v |= (uint32_t)d;
++        out[o++] = (unsigned char)(v >> 16);
++        if (c >= 0) out[o++] = (unsigned char)(v >> 8);
++        if (d >= 0) out[o++] = (unsigned char)v;
++    }
++    out[o] = 0;
++    *out_len = o;
++    return out;
++}
++
++static void gateway_error(const char *id, const char *message) {
++    fputs("{\"v\":1,\"id\":", stdout); json_string(stdout, id ? id : "");
++    fputs(",\"type\":\"error\",\"message\":", stdout); json_string(stdout, message);
++    fputs("}\n", stdout); fflush(stdout);
++}
++
++typedef struct { const char *id; } GatewaySink;
++
++static int gateway_chunk(const void *data, size_t len, void *arg) {
++    GatewaySink *s = arg;
++    char *encoded = base64_encode(data, len);
++    if (!encoded) return -1;
++    printf("{\"v\":1,\"id\":\"%s\",\"type\":\"delta\",\"data\":\"%s\"}\n",
++           s->id, encoded);
++    free(encoded);
++    return fflush(stdout) == 0 ? 0 : -1;
++}
++
++static int gateway_boot_engine(GatewayCfg *c, Engine *e) {
++    char mtype[64] = "";
++    if (c->local_dir) {
++        local_model_type(c->local_dir, mtype, sizeof mtype);
++    } else {
++        Swarm sw;
++        if (swarm_inspect(c->tracker, c->model, &sw)) {
++            fprintf(stderr, "lumabri gateway: model %s is not on swarm %s\n",
++                    c->model, c->tracker);
++            return -1;
++        }
++        snprintf(mtype, sizeof mtype, "%s", sw.model_type);
++    }
++    if (resolve_engine(c->engines_dir, c->engine_path, mtype,
++                       c->engine, sizeof c->engine)) {
++        fprintf(stderr, "lumabri gateway: engine not found: %s\n", c->engine);
++        return -1;
++    }
++    g_eng.booting = 1;
++    g_eng.last_out = nowd();
++    if (engine_spawn(c->engine, c->shim, c->tracker, c->model, c->local_dir,
++                     c->ctx, c->max_new, c->cap_experts, e)) {
++        g_eng.booting = 0;
++        fprintf(stderr, "lumabri gateway: cannot spawn engine\n");
++        return -1;
++    }
++    g_gateway_engine_pid = (sig_atomic_t)e->pid;
++    int rc = engine_wait_ready(e);
++    g_eng.booting = 0;
++    if (rc) {
++        fprintf(stderr, "lumabri gateway: engine did not become ready\n");
++        tail_dump(25);
++        engine_stop(e);
++        g_gateway_engine_pid = 0;
++        return -1;
++    }
++    return 0;
++}
++
++static int gateway_reset(Engine *e) {
++    if (e->proto == PROTO_FRAMED) {
++        static const char reset[] = "\x02RESET\n";
++        char stat[128];
++        if (write_full(e->to, reset, sizeof reset - 1)) return -1;
++        return stream_until_end_to(e, stat, sizeof stat, NULL, NULL);
++    }
++    /* OLMoE's CHAT dialect consumes /reset silently; this is the same
++     * contract used by the terminal front end. */
++    static const char reset[] = "/reset\n";
++    return write_full(e->to, reset, sizeof reset - 1);
++}
++
++static int gateway_generate(Engine *e, const char *id,
++                            const unsigned char *prompt, size_t prompt_len) {
++    if (!prompt_len) { gateway_error(id, "prompt is empty"); return 0; }
++    if (memchr(prompt, '\n', prompt_len) || memchr(prompt, '\r', prompt_len) ||
++        memchr(prompt, 0, prompt_len)) {
++        gateway_error(id, "prompt must be one engine-protocol line");
++        return 0;
++    }
++    if (gateway_reset(e)) { gateway_error(id, "engine reset failed"); return -1; }
++    if (write_full(e->to, prompt, prompt_len) || write_full(e->to, "\n", 1)) {
++        gateway_error(id, "engine input closed"); return -1;
++    }
++
++    char stat[128] = "";
++    double started = nowd();
++    if (e->proto == PROTO_FRAMED) {
++        GatewaySink sink = { id };
++        if (stream_until_end_to(e, stat, sizeof stat, gateway_chunk, &sink)) {
++            gateway_error(id, "engine exited during generation");
++            return -1;
++        }
++    } else {
++        char *reply = read_until_prompt(e->from);
++        if (!reply) { gateway_error(id, "engine exited during generation"); return -1; }
++        char *text = reply;
++        while (*text == '\n') text++;
++        int rc = gateway_chunk(text, strlen(text), &(GatewaySink){ id });
++        free(reply);
++        if (rc) return -1;
++    }
++
++    int ntok = 0;
++    double tps = 0, hit = 0, rss = 0;
++    int nstat = sscanf(stat, "STAT %d %lf %lf %lf", &ntok, &tps, &hit, &rss);
++    printf("{\"v\":1,\"id\":\"%s\",\"type\":\"done\",\"stats\":{"
++           "\"elapsedSeconds\":%.6f", id, nowd() - started);
++    if (nstat >= 1) printf(",\"generatedTokens\":%d", ntok);
++    if (nstat >= 2) printf(",\"tokensPerSecond\":%.6f", tps);
++    if (nstat >= 3) printf(",\"cacheHitPercent\":%.6f", hit);
++    if (nstat >= 4) printf(",\"residentGb\":%.6f", rss);
++    fputs("}}\n", stdout);
++    return fflush(stdout) == 0 ? 0 : -1;
++}
++
++static int cmd_gateway(int argc, char **argv) {
++    GatewayCfg c = {
++        .tracker = "127.0.0.1:7300", .ctx = 2048,
++        .max_new = 256, .cap_experts = 64
++    };
++    for (int i = 0; i < argc; i++) {
++        if (!strcmp(argv[i], "--tracker") && i + 1 < argc) c.tracker = argv[++i];
++        else if (!strcmp(argv[i], "--model") && i + 1 < argc) c.model_arg = argv[++i];
++        else if (!strcmp(argv[i], "--local") && i + 1 < argc) c.local_dir = argv[++i];
++        else if (!strcmp(argv[i], "--engine") && i + 1 < argc) c.engine_path = argv[++i];
++        else if (!strcmp(argv[i], "--engines-dir") && i + 1 < argc) c.engines_dir = argv[++i];
++        else if (!strcmp(argv[i], "--ctx") && i + 1 < argc) c.ctx = atoi(argv[++i]);
++        else if (!strcmp(argv[i], "--max-new") && i + 1 < argc) c.max_new = atoi(argv[++i]);
++        else if (!strcmp(argv[i], "--cap") && i + 1 < argc) c.cap_experts = atoi(argv[++i]);
++        else {
++            fprintf(stderr, "usage: lumabri gateway (--local DIR | --model NAME) "
++                            "[--tracker H:P] [--engine BIN] [--engines-dir DIR] "
++                            "[--ctx N] [--max-new N] [--cap N]\n");
++            return 2;
++        }
++    }
++    if (!!c.local_dir == !!c.model_arg || c.ctx <= 0 || c.max_new <= 0 ||
++        c.cap_experts <= 0) {
++        fprintf(stderr, "lumabri gateway: choose exactly one of --local or --model; "
++                        "numeric limits must be positive\n");
++        return 2;
++    }
++    if (c.local_dir) {
++        const char *base = strrchr(c.local_dir, '/');
++        snprintf(c.model, sizeof c.model, "%s", base && base[1] ? base + 1 : c.local_dir);
++    } else {
++        snprintf(c.model, sizeof c.model, "%s", c.model_arg);
++    }
++
++    char dir[1024];
++    exe_dir(dir, sizeof dir);
++    snprintf(c.shim, sizeof c.shim, "%s/liblumabri.so", dir);
++    if (access(c.shim, R_OK))
++        snprintf(c.shim, sizeof c.shim, "%s/../lib/lumabri/liblumabri.so", dir);
++    if (!c.local_dir && access(c.shim, R_OK)) {
++        fprintf(stderr, "lumabri gateway: liblumabri.so missing; run make or make install\n");
++        return 1;
++    }
++
++    signal(SIGINT, gateway_signal);
++    signal(SIGTERM, gateway_signal);
++    Engine e = {0};
++    if (gateway_boot_engine(&c, &e)) return 1;
++    fputs("{\"v\":1,\"type\":\"ready\",\"protocol\":", stdout);
++    json_string(stdout, e.proto == PROTO_FRAMED ? "framed" : "line");
++    fputs(",\"model\":", stdout); json_string(stdout, c.model);
++    fputs("}\n", stdout); fflush(stdout);
++
++    int rc = 0;
++    char *line = malloc(GATEWAY_LINE_MAX + 2);
++    if (!line) { engine_stop(&e); g_gateway_engine_pid = 0; return 1; }
++    for (;;) {
++        if (!fgets(line, (int)GATEWAY_LINE_MAX + 2, stdin)) break;
++        size_t got = strlen(line);
++        if (got > GATEWAY_LINE_MAX || (got && line[got - 1] != '\n' && !feof(stdin))) {
++            int ch;
++            while ((ch = fgetc(stdin)) != '\n' && ch != EOF) {}
++            gateway_error("", "request exceeds 2 MiB");
++            continue;
++        }
++        char id[129], op[32];
++        long version = 0;
++        if (json_int_field(line, "v", &version) || version != 1 ||
++            json_ascii_field(line, "id", id, sizeof id) || !gateway_id_ok(id) ||
++            json_ascii_field(line, "op", op, sizeof op)) {
++            gateway_error("", "invalid gateway request envelope");
++            continue;
++        }
++        if (!strcmp(op, "shutdown")) {
++            printf("{\"v\":1,\"id\":\"%s\",\"type\":\"bye\"}\n", id);
++            fflush(stdout);
++            break;
++        }
++        if (strcmp(op, "generate")) {
++            gateway_error(id, "unsupported operation");
++            continue;
++        }
++        char *encoded = malloc(GATEWAY_LINE_MAX + 1);
++        if (!encoded) { gateway_error(id, "out of memory"); rc = 1; break; }
++        if (json_ascii_field(line, "prompt", encoded, GATEWAY_LINE_MAX + 1)) {
++            free(encoded); gateway_error(id, "missing base64 prompt"); continue;
++        }
++        size_t prompt_len = 0;
++        unsigned char *prompt = base64_decode(encoded, &prompt_len);
++        free(encoded);
++        if (!prompt || prompt_len > GATEWAY_PROMPT_MAX) {
++            free(prompt); gateway_error(id, "invalid or oversized base64 prompt"); continue;
++        }
++        int grc = gateway_generate(&e, id, prompt, prompt_len);
++        free(prompt);
++        if (grc) { rc = 1; break; }
++    }
++    free(line);
++    engine_stop(&e);
++    g_gateway_engine_pid = 0;
++    return rc;
++}
++
+ /* ---- key: the operator's identity ---------------------------------------
+  * Ed25519 keypair. The secret signs the swarm's ground truth and belongs
+  * only on the machine that owns the model — ideally offline, since the
+@@ -1776,6 +2210,8 @@ int main(int argc, char **argv) {
+     }
+     if (argc >= 2 && !strcmp(argv[1], "serve")) return cmd_serve(argc - 2, argv + 2);
+     if (argc >= 2 && !strcmp(argv[1], "chat"))  return cmd_chat(argc - 2, argv + 2);
++    if (argc >= 2 && !strcmp(argv[1], "gateway"))
++        return cmd_gateway(argc - 2, argv + 2);
+     /* No arguments and a terminal: this is a person, not a script. Chat is
+      * the only thing a person wants by default, and everything it needs is
+      * either remembered or asked for in the panel. */
+@@ -1786,6 +2222,7 @@ int main(int argc, char **argv) {
+         "  lumabri peer-key                                           print this machine's endpoint identity\n"
+         "  lumabri serve --model DIR [--port 7300] [--join TRACKER]   share a model\n"
+         "  lumabri chat  [--tracker HOST:7300] [--model NAME]         chat with it\n"
++        "  lumabri gateway (--local DIR | --model NAME)               NDJSON adapter process\n"
+         "  lumabri key   [--out NAME]                                 operator keypair\n");
+     return 2;
+ }
+diff --git a/gateway_test.sh b/gateway_test.sh
+new file mode 100755
+index 0000000..176cca1
+--- /dev/null
++++ b/gateway_test.sh
+@@ -0,0 +1,72 @@
++#!/usr/bin/env bash
++# Machine gateway contract without a real model: both engine dialects,
++# streamed binary-safe deltas, reset-before-generate, stats, and rejection of
++# prompts that would break the engines' one-line protocol.
++set -euo pipefail
++cd "$(dirname "$0")"
++
++make -s lumabri
++T=$(mktemp -d "${TMPDIR:-.}/lumabri-gateway.XXXXXX")
++trap 'rm -rf "$T"' EXIT
++mkdir -p "$T/model"
++printf '{"model_type":"fake"}' > "$T/model/config.json"
++
++cat > "$T/framed" <<'EOF'
++#!/usr/bin/env bash
++printf '\x01\x01READY\x01\x01\nSTAT 0 0.0 0.0 0.0\n'
++while IFS= read -r line; do
++    if [ "$line" = $'\x02RESET' ]; then
++        printf '\x01\x01END\x01\x01\nSTAT 0 0.0 0.0 0.0\n'
++        continue
++    fi
++    printf 'framed: %s 🦜' "$line"
++    printf '\n\x01\x01END\x01\x01\nSTAT 7 4.25 91.5 2.75\n'
++done
++EOF
++chmod +x "$T/framed"
++
++cat > "$T/line" <<'EOF'
++#!/usr/bin/env bash
++printf 'ready\n> '
++while IFS= read -r line; do
++    [ "$line" = /reset ] && continue
++    printf 'line: %s 🦜\n> ' "$line"
++done
++EOF
++chmod +x "$T/line"
++
++run_case() {
++    local engine=$1 expected=$2 output=$3
++    {
++        printf '%s\n' '{"v":1,"id":"one","op":"generate","prompt":"aGVsbG8gd29ybGQ="}'
++        printf '%s\n' '{"v":1,"id":"bad","op":"generate","prompt":"YmFkCnByb21wdA=="}'
++        printf '%s\n' '{"v":1,"id":"stop","op":"shutdown"}'
++    } | ./lumabri gateway --local "$T/model" --engine "$engine" > "$output"
++
++    python3 - "$output" "$expected" <<'PY'
++import base64, json, sys
++
++records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
++assert records[0]["type"] == "ready", records
++deltas = [r for r in records if r.get("id") == "one" and r.get("type") == "delta"]
++text = b"".join(base64.b64decode(r["data"], validate=True) for r in deltas).decode()
++assert text.rstrip("\n") == sys.argv[2], (text, records)
++done = next(r for r in records if r.get("id") == "one" and r.get("type") == "done")
++if records[0]["protocol"] == "framed":
++    assert done["stats"]["generatedTokens"] == 7, done
++    assert done["stats"]["tokensPerSecond"] == 4.25, done
++bad = next(r for r in records if r.get("id") == "bad")
++assert bad["type"] == "error" and "one engine-protocol line" in bad["message"], bad
++assert records[-1]["type"] == "bye", records[-1]
++PY
++}
++
++echo "· framed gateway"
++run_case "$T/framed" "framed: hello world 🦜" "$T/framed.out"
++echo "  ✓ streamed delta, stats, isolation, validation"
++
++echo "· line gateway"
++run_case "$T/line" "line: hello world 🦜" "$T/line.out"
++echo "  ✓ prompt dialect and reset-before-generate"
++
++echo "LUMABRI GATEWAY TEST: PASS"

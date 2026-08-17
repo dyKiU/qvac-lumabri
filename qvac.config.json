@@ -1,0 +1,5 @@
+{
+  "plugins": [
+    "@lumabri/qvac-adapter/plugin"
+  ]
+}

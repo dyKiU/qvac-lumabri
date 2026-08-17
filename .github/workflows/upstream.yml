@@ -1,0 +1,79 @@
+name: Upstream compatibility
+
+on:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-compatibility
+  cancel-in-progress: true
+
+jobs:
+  lumabri-colibri-head:
+    name: Lumabri + Colibri main
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout adapter
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: adapter
+      - name: Checkout Lumabri main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: JustVugg/lumabri
+          ref: main
+          path: upstream/lumabri
+      - name: Checkout Colibri main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: JustVugg/colibri
+          ref: main
+          path: upstream/colibri
+      - run: adapter/scripts/apply-lumabri-gateway.sh upstream/lumabri
+      - run: make -C upstream/lumabri lumabri liblumabri.so colibri_p2p expert_node_glm ENGINE=../colibri/c
+      - run: upstream/lumabri/gateway_test.sh
+      - name: Prove local and RPC expert outputs match
+        shell: bash
+        run: |
+          numpy_version=$(python3 -c 'import json; print(json.load(open("adapter/compatibility.json"))["verification"]["numpy"])')
+          python3 -m venv .verification-venv
+          .verification-venv/bin/pip install --disable-pip-version-check "numpy==$numpy_version"
+          PATH="$PWD/.verification-venv/bin:$PATH" make -C upstream/lumabri test-phase2 ENGINE=../colibri/c
+
+  qvac-head:
+    name: QVAC SDK main
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout adapter
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: adapter
+      - name: Checkout QVAC main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tetherto/qvac
+          ref: main
+          path: upstream/qvac
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Build and pack upstream SDK
+        working-directory: upstream/qvac/packages/sdk
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npm run build
+          npm pack --pack-destination "$RUNNER_TEMP"
+      - name: Exercise adapter against upstream SDK
+        working-directory: adapter
+        run: |
+          npm install --no-save "$RUNNER_TEMP"/qvac-sdk-*.tgz
+          npm run check
+          npm run bundle
+          npm run verify:bundle
+          npm run test:qvac

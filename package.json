@@ -1,0 +1,55 @@
+{
+  "name": "@lumabri/qvac-adapter",
+  "version": "0.1.0",
+  "description": "QVAC-to-Lumabri adapter for distributed MoE expert execution over RPC.",
+  "type": "module",
+  "exports": {
+    ".": "./client.js",
+    "./client": "./client.js",
+    "./plugin": "./plugin.js",
+    "./gateway-client": "./lib/gateway-client.js",
+    "./prompt": "./lib/prompt.js"
+  },
+  "files": [
+    "client.js",
+    "plugin.js",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "bundle": "node scripts/bundle.mjs",
+    "bundle:cli": "node node_modules/@qvac/cli/dist/index.js bundle sdk",
+    "check": "npm run check:source && npm run check:compat && npm run check:hygiene && npm test",
+    "check:compat": "node scripts/check-compatibility.mjs",
+    "check:hygiene": "node scripts/check-release-hygiene.mjs",
+    "check:source": "node scripts/check-source.mjs",
+    "pack:check": "npm pack --dry-run",
+    "test": "node --test test/*.test.js",
+    "test:qvac": "node test/qvac-e2e.mjs",
+    "verify:bundle": "node scripts/verify-qvac-bundle.mjs"
+  },
+  "engines": {
+    "node": ">=20 <23"
+  },
+  "dependencies": {
+    "bare-subprocess": "^6.1.0"
+  },
+  "peerDependencies": {
+    "@qvac/sdk": ">=0.17.1 <0.18.0",
+    "zod": ">=4.4.3 <5.0.0"
+  },
+  "devDependencies": {
+    "@qvac/cli": "0.11.0",
+    "@qvac/sdk": "0.17.1",
+    "zod": "4.4.3"
+  },
+  "keywords": [
+    "qvac",
+    "lumabri",
+    "moe",
+    "rpc",
+    "distributed-inference"
+  ],
+  "license": "Apache-2.0"
+}
