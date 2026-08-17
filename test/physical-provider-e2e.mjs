@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { completion, unloadModel } from '@qvac/sdk'
-import { createQvacProviderPool, lumabriStatus } from '../client.js'
+import { createQvacProviderPool } from '../client.js'
+import { GATEWAY_PROTOCOL_VERSION } from '../lib/gateway-client.js'
 
 function required(name) {
   const value = process.env[name]
@@ -16,6 +17,10 @@ function positiveInteger(name, fallback) {
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex')
+}
+
+function reportPhase(phase) {
+  process.stderr.write(`${JSON.stringify({ type: 'progress', phase })}\n`)
 }
 
 function providerPublicKeys() {
@@ -55,6 +60,7 @@ const startedAt = performance.now()
 let modelId
 
 try {
+  reportPhase('provider-selection-started')
   const loaded = await providerPool.loadModel({
     modelSrc: '',
     modelType: 'lumabri-moe',
@@ -76,19 +82,23 @@ try {
   })
   modelId = loaded.modelId
   const loadedAt = performance.now()
-  const status = await lumabriStatus(modelId)
+  reportPhase('model-loaded')
   const run = completion({
     modelId,
     stream: true,
     history: [{ role: 'user', content: prompt }]
   })
+  reportPhase('completion-started')
   let firstContentAt
   for await (const event of run.events) {
     if (event.type === 'contentDelta' && firstContentAt === undefined) {
       firstContentAt = performance.now()
+      reportPhase('first-content')
     }
   }
+  reportPhase('event-stream-complete')
   const final = await run.final
+  reportPhase('final-result-ready')
   const completedAt = performance.now()
 
   process.stdout.write(`${JSON.stringify({
@@ -99,7 +109,7 @@ try {
     selectedProviderIndex: publicKeys.findIndex(
       (publicKey) => publicKey.toLowerCase() === loaded.provider.providerPublicKey
     ),
-    gatewayProtocol: status.protocol,
+    gatewayProtocolVersion: GATEWAY_PROTOCOL_VERSION,
     promptSha256: sha256(prompt),
     outputSha256: sha256(final.contentText),
     outputBytes: Buffer.byteLength(final.contentText),
@@ -111,7 +121,9 @@ try {
   }, null, 2)}\n`)
 } finally {
   if (modelId) {
+    reportPhase('model-unload-started')
     providerPool.forgetModel(modelId)
     await unloadModel({ modelId })
+    reportPhase('model-unloaded')
   }
 }

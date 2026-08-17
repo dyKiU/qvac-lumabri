@@ -72,9 +72,10 @@ gate releases; pinned candidates and upstream heads run as weekly canaries.
 Node.js is `>=20 <23`; Zod is `>=4.4.3 <5.0.0`.
 
 The adapter streams text and stats, serializes same-model requests, resets KV
-state between requests, supervises the native process, and supports hard
-cancellation. Tools, attachments, structured output, and per-request sampling
-are not supported in `0.1.x`.
+state between requests, and supervises the native process. Hard cancellation
+and status RPC are local-load features: QVAC `0.17.1` does not delegate custom
+plugin RPC. Tools, attachments, structured output, and per-request sampling are
+not supported in `0.1.x`.
 
 ## Multi-node
 

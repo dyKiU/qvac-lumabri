@@ -12,9 +12,8 @@ export function createQvacProviderPool(options) {
 }
 
 /**
- * Hard-cancel a Lumabri completion. QVAC 0.17.1 does not expose its worker
- * RequestRegistry to external plugins, so this small plugin RPC is the
- * adapter's cancellation bridge.
+ * Hard-cancel a locally loaded Lumabri completion. QVAC 0.17.1 does not
+ * delegate custom plugin RPC, so delegated models cannot use this bridge.
  */
 export function cancelLumabri(modelId, requestId) {
   return invokePlugin({
@@ -24,6 +23,7 @@ export function cancelLumabri(modelId, requestId) {
   })
 }
 
+/** Inspect a locally loaded gateway; delegated plugin RPC requires newer QVAC support. */
 export function lumabriStatus(modelId) {
   return invokePlugin({
     modelId,

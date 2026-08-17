@@ -31,7 +31,8 @@
         "sdkGitHead": "2d1ed8085cf548b5911e19f3c4500aacb53ccf8a",
         "cli": "0.11.0",
         "cliGitHead": "4e3c73d447c17a62ac73f86614b8c15ba74cfc8b",
-        "sourceRef": "f63696ac107683dec301ce15c2c11b0a18540d8c"
+        "sourceRef": "f63696ac107683dec301ce15c2c11b0a18540d8c",
+        "delegatedPluginRpc": false
       },
       "gatewayProtocol": 1,
       "lumabri": {
@@ -60,7 +61,8 @@
         "sdkGitHead": "2d1ed8085cf548b5911e19f3c4500aacb53ccf8a",
         "cli": "0.11.0",
         "cliGitHead": "4e3c73d447c17a62ac73f86614b8c15ba74cfc8b",
-        "sourceRef": "2d1ed8085cf548b5911e19f3c4500aacb53ccf8a"
+        "sourceRef": "2d1ed8085cf548b5911e19f3c4500aacb53ccf8a",
+        "delegatedPluginRpc": false
       },
       "gatewayProtocol": 1,
       "lumabri": {
@@ -87,7 +89,8 @@
       "qvac": {
         "sdk": "main",
         "cli": "main",
-        "sourceRef": "main"
+        "sourceRef": "main",
+        "delegatedPluginRpc": false
       },
       "gatewayProtocol": 1,
       "lumabri": {

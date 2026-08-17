@@ -82,6 +82,11 @@ pool.forgetModel(modelId)
 QVAC itself retains the authoritative model-to-provider binding used for
 completion RPC.
 
+QVAC SDK `0.17.1` delegates built-in completion and unload calls, but not
+custom plugin RPC. `lumabriStatus()` and `cancelLumabri()` therefore apply only
+to local loads in this contract line. Distributed recovery reloads the model on
+another provider and replays full history.
+
 ## Remote model host over SSH
 
 A QVAC provider may keep the worker on one machine while running the Lumabri

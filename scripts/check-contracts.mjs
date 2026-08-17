@@ -44,6 +44,11 @@ for (const contract of matrix.contracts) {
   ids.add(contract.id)
   assert(allowedStatuses.has(contract.status), `${contract.id}: invalid status`)
   assert(matrix.gateway.supported.includes(contract.gatewayProtocol), `${contract.id}: unsupported gateway protocol`)
+  assert.equal(
+    typeof contract.qvac.delegatedPluginRpc,
+    'boolean',
+    `${contract.id}: delegated plugin RPC capability must be explicit`
+  )
   assert.equal(contract.lumabri.gatewayPatch, 'native/lumabri-gateway.patch')
   for (const component of ['qvac', 'lumabri', 'colibri']) assertRef(contract, component)
   if (contract.status !== 'edge') {
