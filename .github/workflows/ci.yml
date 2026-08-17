@@ -14,35 +14,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  versions:
-    name: Resolve pinned versions
+  contracts:
+    name: Resolve contract matrix
     runs-on: ubuntu-latest
     outputs:
-      lumabri_ref: ${{ steps.refs.outputs.lumabri_ref }}
-      colibri_ref: ${{ steps.refs.outputs.colibri_ref }}
-      qvac_ref: ${{ steps.refs.outputs.qvac_ref }}
-      numpy: ${{ steps.refs.outputs.numpy }}
+      supported: ${{ steps.matrix.outputs.supported }}
+      node: ${{ steps.matrix.outputs.node }}
+      numpy: ${{ steps.matrix.outputs.numpy }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-      - id: refs
+      - run: npm run check:contracts
+      - id: matrix
         shell: bash
         run: |
-          echo "lumabri_ref=$(node -p "require('./compatibility.json').lumabri.sourceRef")" >> "$GITHUB_OUTPUT"
-          echo "colibri_ref=$(node -p "require('./compatibility.json').colibri.sourceRef")" >> "$GITHUB_OUTPUT"
-          echo "qvac_ref=$(node -p "require('./compatibility.json').qvac.sourceRef")" >> "$GITHUB_OUTPUT"
-          echo "numpy=$(node -p "require('./compatibility.json').verification.numpy")" >> "$GITHUB_OUTPUT"
+          echo "supported=$(node scripts/list-contracts.mjs supported)" >> "$GITHUB_OUTPUT"
+          echo "node=$(node -p "JSON.stringify(require('./contracts.json').runtime.node.tested)")" >> "$GITHUB_OUTPUT"
+          echo "numpy=$(node -p "require('./contracts.json').runtime.numpy")" >> "$GITHUB_OUTPUT"
 
   unit:
     name: Unit / ${{ matrix.os }} / Node ${{ matrix.node }}
+    needs: contracts
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        node: [20, 22]
+        node: ${{ fromJSON(needs.contracts.outputs.node) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -61,9 +61,13 @@ jobs:
       - run: npm run pack:check
 
   qvac-published:
-    name: Published QVAC bundle and RPC
+    name: Published QVAC bundle and RPC / ${{ matrix.contract.id }}
+    needs: contracts
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      matrix:
+        contract: ${{ fromJSON(needs.contracts.outputs.supported) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -71,6 +75,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Install contract QVAC versions
+        run: npm install --no-save --package-lock=false "@qvac/sdk@${{ matrix.contract.qvac.sdk }}" "@qvac/cli@${{ matrix.contract.qvac.cli }}"
       - run: npm run bundle
       - run: npm run verify:bundle
       - run: npm run bundle:cli
@@ -78,19 +84,20 @@ jobs:
       - run: npm run test:qvac
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: qvac-worker
+          name: qvac-worker-${{ matrix.contract.id }}
           path: |
             qvac/worker.entry.mjs
             qvac/worker.bundle.js
             qvac/addons.manifest.json
 
   native-gateway:
-    name: Lumabri gateway / ${{ matrix.os }}
-    needs: versions
+    name: Lumabri gateway / ${{ matrix.contract.id }} / ${{ matrix.os }}
+    needs: contracts
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        contract: ${{ fromJSON(needs.contracts.outputs.supported) }}
         os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout adapter
@@ -101,17 +108,20 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: JustVugg/lumabri
-          ref: ${{ needs.versions.outputs.lumabri_ref }}
+          ref: ${{ matrix.contract.lumabri.sourceRef }}
           path: upstream/lumabri
       - run: adapter/scripts/apply-lumabri-gateway.sh upstream/lumabri
       - run: make -C upstream/lumabri lumabri
       - run: upstream/lumabri/gateway_test.sh
 
   native-moe:
-    name: Lumabri chatter and expert peers
-    needs: versions
+    name: Lumabri chatter and expert peers / ${{ matrix.contract.id }}
+    needs: contracts
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      matrix:
+        contract: ${{ fromJSON(needs.contracts.outputs.supported) }}
     steps:
       - name: Checkout adapter
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -121,13 +131,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: JustVugg/lumabri
-          ref: ${{ needs.versions.outputs.lumabri_ref }}
+          ref: ${{ matrix.contract.lumabri.sourceRef }}
           path: upstream/lumabri
       - name: Checkout pinned Colibri
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: JustVugg/colibri
-          ref: ${{ needs.versions.outputs.colibri_ref }}
+          ref: ${{ matrix.contract.colibri.sourceRef }}
           path: upstream/colibri
       - run: adapter/scripts/apply-lumabri-gateway.sh upstream/lumabri
       - name: Build model host and expert-node sides
@@ -136,14 +146,17 @@ jobs:
         shell: bash
         run: |
           python3 -m venv .verification-venv
-          .verification-venv/bin/pip install --disable-pip-version-check numpy==${{ needs.versions.outputs.numpy }}
+          .verification-venv/bin/pip install --disable-pip-version-check numpy==${{ needs.contracts.outputs.numpy }}
           PATH="$PWD/.verification-venv/bin:$PATH" make -C upstream/lumabri test-phase2 ENGINE=../colibri/c
 
   qvac-source:
-    name: Pinned QVAC source build
-    needs: versions
+    name: Pinned QVAC source build / ${{ matrix.contract.id }}
+    needs: contracts
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      matrix:
+        contract: ${{ fromJSON(needs.contracts.outputs.supported) }}
     steps:
       - name: Checkout adapter
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -153,7 +166,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: tetherto/qvac
-          ref: ${{ needs.versions.outputs.qvac_ref }}
+          ref: ${{ matrix.contract.qvac.sourceRef }}
           path: upstream/qvac
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
