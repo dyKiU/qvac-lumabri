@@ -82,6 +82,24 @@ pool.forgetModel(modelId)
 QVAC itself retains the authoritative model-to-provider binding used for
 completion RPC.
 
+## Remote model host over SSH
+
+A QVAC provider may keep the worker on one machine while running the Lumabri
+gateway and Colibri engine on a private model host. Set `transport.type` to
+`ssh`; `gatewayPath`, `localDir`, and the engine path then refer to the remote
+host.
+
+The SSH transport always uses batch mode, strict host-key checking, disabled
+forwarding, and individually quoted remote arguments. Enrol the model host key
+and credentials in the provider machine's private configuration; do not put
+them in this repository.
+
+The opt-in `npm run test:physical` check reads provider keys, host alias,
+remote paths, and model fingerprint from environment variables. Use the
+comma-separated `QVAC_PROVIDER_PUBLIC_KEYS` form to verify failover order. Its
+JSON result contains hashes, selected provider index, and timings—but no keys,
+hostnames, paths, prompts, or generated text.
+
 ## Lumabri expert swarm
 
 Every QVAC provider runs its own gateway and Colibri coordinator, but all of

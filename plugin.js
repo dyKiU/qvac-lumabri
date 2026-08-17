@@ -11,9 +11,22 @@ import { renderHistory } from './lib/prompt.js'
 const models = new Map()
 let fallbackRequestSequence = 0
 
+const transportSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('local') }).strict(),
+  z.object({
+    type: z.literal('ssh'),
+    host: z.string().regex(/^[a-z0-9][a-z0-9._:-]*$/i),
+    sshPath: z.string().min(1).default('ssh'),
+    connectTimeoutSeconds: z.number().int().positive().max(120).default(10),
+    identityFile: z.string().min(1).optional(),
+    knownHostsFile: z.string().min(1).optional()
+  }).strict()
+])
+
 const loadConfigSchema = z
   .object({
     gatewayPath: z.string().min(1).default('lumabri'),
+    transport: transportSchema.default({ type: 'local' }),
     localDir: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
     tracker: z.string().min(1).default('127.0.0.1:7300'),

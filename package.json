@@ -32,6 +32,9 @@
     "pack:check": "npm pack --dry-run",
     "test": "node --test test/gateway-client.test.js test/prompt.test.js test/provider-pool.test.js",
     "test:qvac": "node test/qvac-e2e.mjs",
+    "test:qvac:ssh": "node test/qvac-ssh-e2e.mjs",
+    "test:physical": "node test/physical-provider-e2e.mjs",
+    "test:physical:provider": "node test/physical-provider-host.mjs",
     "verify:bundle": "node scripts/verify-qvac-bundle.mjs"
   },
   "engines": {
