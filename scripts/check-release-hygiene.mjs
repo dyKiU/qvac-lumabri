@@ -7,6 +7,7 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const ignored = new Set([
   '.git',
   'node_modules',
+  'dist',
   'qvac',
   '.upstream',
   '.cache',

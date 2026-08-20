@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { GATEWAY_PROTOCOL_VERSION } from '../lib/gateway-client.js'
+import { GATEWAY_PROTOCOL_VERSION } from '../dist/lib/gateway-client.js'
 
 const readJson = async (name) => JSON.parse(await readFile(new URL(`../${name}`, import.meta.url)))
 const [pkg, matrix, qvacConfig, readme] = await Promise.all([

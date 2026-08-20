@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { QvacProviderPool, QvacProviderPoolError } from '../lib/provider-pool.js'
+import { QvacProviderPool, QvacProviderPoolError } from '../dist/lib/provider-pool.js'
 
 const CONTRACT = 'stable-0.1'
 const MODEL = 'sha256:model-a'

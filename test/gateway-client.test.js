@@ -8,7 +8,7 @@ import {
   GatewayCancelledError,
   GatewayClient,
   Utf8ChunkDecoder
-} from '../lib/gateway-client.js'
+} from '../dist/lib/gateway-client.js'
 
 const fakeGateway = fileURLToPath(new URL('./fake-gateway.mjs', import.meta.url))
 

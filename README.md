@@ -2,6 +2,10 @@
 
 **QVAC-to-Lumabri adapter for distributed MoE expert execution over RPC.**
 
+The adapter is authored in strict TypeScript and published as ESM JavaScript
+with generated type declarations. Runtime configuration and protocol inputs
+remain validated at the process boundary.
+
 [![CI](https://github.com/dyKiU/qvac-lumabri/actions/workflows/ci.yml/badge.svg)](https://github.com/dyKiU/qvac-lumabri/actions/workflows/ci.yml)
 [![Upstream compatibility](https://github.com/dyKiU/qvac-lumabri/actions/workflows/upstream.yml/badge.svg)](https://github.com/dyKiU/qvac-lumabri/actions/workflows/upstream.yml)
 
@@ -89,6 +93,8 @@ failure boundaries, and the physical-host acceptance test.
 ## Verify
 
 ```sh
+npm run typecheck      # strict TypeScript contracts
+npm run build          # emit ESM JavaScript and declarations to dist/
 npm run check          # source, constraints, unit tests
 npm run check:freshness # compare candidate pins with latest releases
 npm run pack:check     # publish surface

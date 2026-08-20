@@ -1,11 +1,21 @@
-const ROLE_LABELS = {
+const ROLE_LABELS: Readonly<Record<string, string>> = {
   system: 'System',
   user: 'User',
   assistant: 'Assistant',
   tool: 'Tool'
 }
 
-export function escapeEngineLine(value) {
+export interface HistoryMessage {
+  role: string
+  content: string
+}
+
+export interface RenderHistoryOptions {
+  mode?: 'full' | 'last-user'
+  maxPromptBytes?: number
+}
+
+export function escapeEngineLine(value: unknown): string {
   return String(value)
     .replaceAll('\\', '\\\\')
     .replaceAll('\r', '\\r')
@@ -19,7 +29,10 @@ export function escapeEngineLine(value) {
  * Colibri chat/serve protocols. Lumabri resets before every request, so the
  * complete history is explicit and cannot leak between QVAC sessions.
  */
-export function renderHistory(history, options = {}) {
+export function renderHistory(
+  history: readonly HistoryMessage[],
+  options: RenderHistoryOptions = {}
+): string {
   const { mode = 'full', maxPromptBytes = 1024 * 1024 } = options
   if (!Array.isArray(history) || history.length === 0) {
     throw new Error('completion history must contain at least one message')
@@ -27,9 +40,10 @@ export function renderHistory(history, options = {}) {
 
   let selected = history
   if (mode === 'last-user') {
-    let lastUser
+    let lastUser: HistoryMessage | undefined
     for (let i = history.length - 1; i >= 0; i--) {
-      if (history[i].role === 'user') { lastUser = history[i]; break }
+      const message = history[i]
+      if (message?.role === 'user') { lastUser = message; break }
     }
     selected = lastUser ? [lastUser] : []
   }

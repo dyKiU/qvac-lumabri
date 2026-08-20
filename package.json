@@ -3,37 +3,58 @@
   "version": "0.1.0",
   "description": "QVAC-to-Lumabri adapter for distributed MoE expert execution over RPC.",
   "type": "module",
+  "types": "./dist/client.d.ts",
   "exports": {
-    ".": "./client.js",
-    "./client": "./client.js",
-    "./plugin": "./plugin.js",
-    "./gateway-client": "./lib/gateway-client.js",
-    "./prompt": "./lib/prompt.js",
-    "./provider-pool": "./lib/provider-pool.js"
+    ".": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./plugin": {
+      "types": "./dist/plugin.d.ts",
+      "default": "./dist/plugin.js"
+    },
+    "./gateway-client": {
+      "types": "./dist/lib/gateway-client.d.ts",
+      "default": "./dist/lib/gateway-client.js"
+    },
+    "./prompt": {
+      "types": "./dist/lib/prompt.d.ts",
+      "default": "./dist/lib/prompt.js"
+    },
+    "./provider-pool": {
+      "types": "./dist/lib/provider-pool.d.ts",
+      "default": "./dist/lib/provider-pool.js"
+    }
   },
   "files": [
-    "client.js",
-    "plugin.js",
-    "lib/",
+    "dist/",
     "docs/",
     "contracts.json",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "bundle": "node scripts/bundle.mjs",
-    "bundle:cli": "node node_modules/@qvac/cli/dist/index.js bundle sdk",
-    "check": "npm run check:source && npm run check:contracts && npm run check:hygiene && npm test",
-    "check:contracts": "node scripts/check-contracts.mjs && node scripts/render-contracts.mjs --check",
+    "build": "tsc --project tsconfig.json",
+    "typecheck": "tsc --noEmit --project tsconfig.json",
+    "bundle": "npm run build && node scripts/bundle.mjs",
+    "bundle:cli": "npm run build && node node_modules/@qvac/cli/dist/index.js bundle sdk",
+    "check": "npm run check:source && npm run typecheck && npm run check:types && npm run check:contracts && npm run check:hygiene && npm test",
+    "check:contracts": "npm run build && node scripts/check-contracts.mjs && node scripts/render-contracts.mjs --check",
     "check:freshness": "node scripts/check-contract-freshness.mjs",
     "check:hygiene": "node scripts/check-release-hygiene.mjs",
     "check:source": "node scripts/check-source.mjs",
+    "check:types": "npm run build && tsc --noEmit --project tsconfig.types.json",
     "docs:contracts": "node scripts/render-contracts.mjs --write",
     "pack:check": "npm pack --dry-run",
-    "test": "node --test test/gateway-client.test.js test/prompt.test.js test/provider-pool.test.js",
-    "test:qvac": "node test/qvac-e2e.mjs",
-    "test:qvac:ssh": "node test/qvac-ssh-e2e.mjs",
-    "test:physical": "node test/physical-provider-e2e.mjs",
+    "prepack": "npm run build",
+    "test": "npm run build && node --test test/gateway-client.test.js test/prompt.test.js test/provider-pool.test.js",
+    "test:qvac": "npm run build && node test/qvac-e2e.mjs",
+    "test:qvac:ssh": "npm run build && node test/qvac-ssh-e2e.mjs",
+    "test:physical": "npm run build && node test/physical-provider-e2e.mjs",
     "test:physical:provider": "node test/physical-provider-host.mjs",
     "verify:bundle": "node scripts/verify-qvac-bundle.mjs"
   },
@@ -50,6 +71,8 @@
   "devDependencies": {
     "@qvac/cli": "0.11.0",
     "@qvac/sdk": "0.17.1",
+    "@types/node": "20.19.24",
+    "typescript": "5.9.3",
     "zod": "4.4.3"
   },
   "overrides": {

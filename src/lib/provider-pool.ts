@@ -1,13 +1,70 @@
 const publicKeyPattern = /^[0-9a-f]{64}$/i
 
-function requireString(value, name) {
+export interface QvacProvider {
+  providerPublicKey: string
+  contractId: string
+  modelFingerprint: string
+  [key: string]: unknown
+}
+
+export interface QvacProviderIdentity {
+  providerPublicKey: string
+  contractId: string
+  modelFingerprint: string
+}
+
+export interface QvacProviderAttempt {
+  phase: 'heartbeat' | 'loadModel'
+  provider: QvacProviderIdentity
+  error: unknown
+}
+
+export interface QvacDelegateOptions {
+  healthCheckTimeout?: number
+  timeout?: number
+  forceNewConnection?: boolean
+}
+
+export interface QvacLoadDelegate {
+  providerPublicKey: string
+  healthCheckTimeout: number
+  fallbackToLocal: false
+  timeout?: number
+  forceNewConnection?: boolean
+}
+
+export type QvacHeartbeatOperation = (params: {
+  delegate: { providerPublicKey: string; timeout: number }
+}) => Promise<unknown>
+
+export type QvacLoadModelOptions = Record<string, unknown>
+
+export type QvacLoadModelOperation = (
+  options: QvacLoadModelOptions & { delegate: QvacLoadDelegate }
+) => Promise<string>
+
+export interface QvacProviderPoolOptions {
+  providers: readonly QvacProvider[]
+  contractId: string
+  modelFingerprint: string
+  heartbeat: QvacHeartbeatOperation
+  loadModel: QvacLoadModelOperation
+  healthCheckTimeout?: number
+}
+
+interface ProviderProbeResult {
+  available: readonly Readonly<QvacProvider>[]
+  failed: QvacProviderAttempt[]
+}
+
+function requireString(value: unknown, name: string): string {
   if (typeof value !== 'string' || value.length === 0) {
     throw new TypeError(`${name} must be a non-empty string`)
   }
   return value
 }
 
-function normalizeProvider(provider, index) {
+function normalizeProvider(provider: QvacProvider, index: number): Readonly<QvacProvider> {
   if (!provider || typeof provider !== 'object') {
     throw new TypeError(`providers[${index}] must be an object`)
   }
@@ -29,9 +86,13 @@ function normalizeProvider(provider, index) {
   })
 }
 
-function delegateOptions(providerPublicKey, options, defaultHealthCheckTimeout) {
+function delegateOptions(
+  providerPublicKey: string,
+  options: QvacDelegateOptions,
+  defaultHealthCheckTimeout: number
+): QvacLoadDelegate {
   const healthCheckTimeout = options.healthCheckTimeout ?? defaultHealthCheckTimeout
-  const delegate = {
+  const delegate: QvacLoadDelegate = {
     providerPublicKey,
     healthCheckTimeout,
     fallbackToLocal: false
@@ -43,7 +104,7 @@ function delegateOptions(providerPublicKey, options, defaultHealthCheckTimeout) 
   return delegate
 }
 
-function providerIdentity(provider) {
+function providerIdentity(provider: QvacProvider): QvacProviderIdentity {
   return {
     providerPublicKey: provider.providerPublicKey,
     contractId: provider.contractId,
@@ -52,7 +113,9 @@ function providerIdentity(provider) {
 }
 
 export class QvacProviderPoolError extends Error {
-  constructor(message, attempts = []) {
+  readonly attempts: QvacProviderAttempt[]
+
+  constructor(message: string, attempts: QvacProviderAttempt[] = []) {
     super(message)
     this.name = 'QvacProviderPoolError'
     this.attempts = attempts
@@ -64,6 +127,14 @@ export class QvacProviderPoolError extends Error {
  * Provider order is the default priority; QVAC pins later completions itself.
  */
 export class QvacProviderPool {
+  readonly contractId: string
+  readonly modelFingerprint: string
+  readonly heartbeat: QvacHeartbeatOperation
+  readonly loadModelOperation: QvacLoadModelOperation
+  readonly healthCheckTimeout: number
+  readonly providers: readonly Readonly<QvacProvider>[]
+  readonly modelProviders = new Map<string, Readonly<QvacProvider>>()
+
   constructor({
     providers,
     contractId,
@@ -71,7 +142,7 @@ export class QvacProviderPool {
     heartbeat,
     loadModel,
     healthCheckTimeout = 3_000
-  }) {
+  }: QvacProviderPoolOptions) {
     if (!Array.isArray(providers) || providers.length === 0) {
       throw new TypeError('providers must be a non-empty array')
     }
@@ -88,9 +159,7 @@ export class QvacProviderPool {
     this.loadModelOperation = loadModel
     this.healthCheckTimeout = healthCheckTimeout
     this.providers = providers.map(normalizeProvider)
-    this.modelProviders = new Map()
-
-    const publicKeys = new Set()
+    const publicKeys = new Set<string>()
     for (const provider of this.providers) {
       if (publicKeys.has(provider.providerPublicKey)) {
         throw new TypeError(`duplicate provider public key: ${provider.providerPublicKey}`)
@@ -99,14 +168,14 @@ export class QvacProviderPool {
     }
   }
 
-  compatibleProviders() {
+  compatibleProviders(): readonly Readonly<QvacProvider>[] {
     return this.providers.filter((provider) =>
       provider.contractId === this.contractId &&
       provider.modelFingerprint === this.modelFingerprint
     )
   }
 
-  async #probeProviders(healthCheckTimeout) {
+  async #probeProviders(healthCheckTimeout: number): Promise<ProviderProbeResult> {
     const probes = await Promise.all(this.compatibleProviders().map(async (provider) => {
       try {
         await this.heartbeat({
@@ -115,26 +184,34 @@ export class QvacProviderPool {
             timeout: healthCheckTimeout
           }
         })
-        return { provider }
+        return { ok: true as const, provider }
       } catch (error) {
-        return { provider, error }
+        return { ok: false as const, provider, error }
       }
     }))
-    return {
-      available: probes.filter((probe) => !probe.error).map((probe) => probe.provider),
-      failed: probes.filter((probe) => probe.error).map((probe) => ({
+    const available: Readonly<QvacProvider>[] = []
+    const failed: QvacProviderAttempt[] = []
+    for (const probe of probes) {
+      if (probe.ok) available.push(probe.provider)
+      else failed.push({
         phase: 'heartbeat',
         provider: providerIdentity(probe.provider),
         error: probe.error
-      }))
+      })
     }
+    return { available, failed }
   }
 
-  async availableProviders({ healthCheckTimeout = this.healthCheckTimeout } = {}) {
+  async availableProviders(
+    { healthCheckTimeout = this.healthCheckTimeout }: { healthCheckTimeout?: number } = {}
+  ): Promise<readonly Readonly<QvacProvider>[]> {
     return (await this.#probeProviders(healthCheckTimeout)).available
   }
 
-  async loadModel(options, delegate = {}) {
+  async loadModel(
+    options: QvacLoadModelOptions,
+    delegate: QvacDelegateOptions = {}
+  ): Promise<{ modelId: string; provider: Readonly<QvacProvider> }> {
     if (!options || typeof options !== 'object') {
       throw new TypeError('loadModel options are required')
     }
@@ -168,11 +245,11 @@ export class QvacProviderPool {
     throw new QvacProviderPoolError('no QVAC provider could load the model', attempts)
   }
 
-  providerForModel(modelId) {
+  providerForModel(modelId: string): Readonly<QvacProvider> | null {
     return this.modelProviders.get(modelId) ?? null
   }
 
-  forgetModel(modelId) {
+  forgetModel(modelId: string): boolean {
     return this.modelProviders.delete(modelId)
   }
 }

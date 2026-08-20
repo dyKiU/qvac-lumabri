@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { escapeEngineLine, renderHistory } from '../lib/prompt.js'
+import { escapeEngineLine, renderHistory } from '../dist/lib/prompt.js'
 
 test('renders complete history as exactly one engine protocol line', () => {
   const prompt = renderHistory([

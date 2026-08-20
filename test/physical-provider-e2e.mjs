@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { completion, unloadModel } from '@qvac/sdk'
-import { createQvacProviderPool } from '../client.js'
-import { GATEWAY_PROTOCOL_VERSION } from '../lib/gateway-client.js'
+import { createQvacProviderPool } from '../dist/client.js'
+import { GATEWAY_PROTOCOL_VERSION } from '../dist/lib/gateway-client.js'
 
 function required(name) {
   const value = process.env[name]

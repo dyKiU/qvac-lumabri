@@ -4,11 +4,14 @@ import { defineHandler, definePlugin } from '@qvac/sdk'
 import {
   GatewayCancelledError,
   GatewayClient,
-  Utf8ChunkDecoder
+  Utf8ChunkDecoder,
+  type GatewaySpawn,
+  type GatewayStats
 } from './lib/gateway-client.js'
 import { renderHistory } from './lib/prompt.js'
 
-const models = new Map()
+const gatewaySpawn = spawn as unknown as GatewaySpawn
+const models = new Map<string, LumabriModel>()
 let fallbackRequestSequence = 0
 
 const transportSchema = z.discriminatedUnion('type', [
@@ -92,18 +95,30 @@ const statusResponseSchema = z
   })
   .strict()
 
-function getModel(modelId) {
+type LoadConfig = z.output<typeof loadConfigSchema>
+type CompletionRequest = z.output<typeof completionRequestSchema>
+type CompletionResponse = z.output<typeof completionResponseSchema>
+
+interface SelectedStats {
+  generatedTokens?: number
+  tokensPerSecond?: number
+}
+
+function getModel(modelId: string): LumabriModel {
   const model = models.get(modelId)
   if (!model) throw new Error(`Lumabri model is not loaded: ${modelId}`)
   return model
 }
 
-function validateCompletionFeatures(request) {
+function validateCompletionFeatures(request: CompletionRequest): void {
   if (request.tools?.length) {
     throw new Error('Lumabri adapter 0.1 does not support QVAC tool calling')
   }
-  if (request.responseFormat && request.responseFormat.type !== 'text') {
-    throw new Error('Lumabri adapter 0.1 supports text responseFormat only')
+  if (request.responseFormat) {
+    if (typeof request.responseFormat !== 'object' ||
+        !('type' in request.responseFormat) || request.responseFormat.type !== 'text') {
+      throw new Error('Lumabri adapter 0.1 supports text responseFormat only')
+    }
   }
   for (const message of request.history) {
     if (message.attachments?.length) {
@@ -112,18 +127,26 @@ function validateCompletionFeatures(request) {
   }
 }
 
-function selectStats(stats) {
-  const result = {}
-  if (Number.isFinite(stats?.generatedTokens)) result.generatedTokens = stats.generatedTokens
-  if (Number.isFinite(stats?.tokensPerSecond)) result.tokensPerSecond = stats.tokensPerSecond
+function selectStats(stats: GatewayStats): SelectedStats {
+  const result: SelectedStats = {}
+  if (typeof stats.generatedTokens === 'number' && Number.isFinite(stats.generatedTokens)) {
+    result.generatedTokens = stats.generatedTokens
+  }
+  if (typeof stats.tokensPerSecond === 'number' && Number.isFinite(stats.tokensPerSecond)) {
+    result.tokensPerSecond = stats.tokensPerSecond
+  }
   return result
 }
 
 class LumabriModel {
-  constructor(modelId, config) {
+  readonly modelId: string
+  readonly config: LoadConfig
+  readonly gateway: GatewayClient
+
+  constructor(modelId: string, config: LoadConfig) {
     this.modelId = modelId
     this.config = config
-    this.gateway = new GatewayClient(config, { spawn })
+    this.gateway = new GatewayClient(config, { spawn: gatewaySpawn })
   }
 
   async load() {
@@ -145,7 +168,9 @@ const lumabriPlugin = definePlugin({
   loadConfigSchema,
 
   createModel(params) {
-    return { model: new LumabriModel(params.modelId, params.modelConfig) }
+    return {
+      model: new LumabriModel(params.modelId, loadConfigSchema.parse(params.modelConfig))
+    }
   },
 
   handlers: {
@@ -161,14 +186,17 @@ const lumabriPlugin = definePlugin({
         validateCompletionFeatures(request)
         const model = getModel(request.modelId)
         const requestId = request.requestId ?? `lumabri-${++fallbackRequestSequence}`
-        const prompt = renderHistory(request.history, model.config)
+        const prompt = renderHistory(request.history, {
+          mode: model.config.historyMode,
+          maxPromptBytes: model.config.maxPromptBytes
+        })
         const decoder = new Utf8ChunkDecoder()
         const run = model.gateway.generate({ requestId, prompt })
-        const buffered = []
+        const buffered: unknown[] = []
         let sequence = 0
         let fullText = ''
 
-        const send = (events) => {
+        const send = (events: unknown[]): CompletionResponse | null => {
           if (request.stream) return { type: 'completionStream', events }
           buffered.push(...events)
           return null
@@ -180,7 +208,7 @@ const lumabriPlugin = definePlugin({
             const text = decoder.push(result.value)
             if (text) {
               fullText += text
-              const events = [{ type: 'contentDelta', seq: sequence++, text }]
+              const events: unknown[] = [{ type: 'contentDelta', seq: sequence++, text }]
               if (request.emitRawDeltas) {
                 events.push({ type: 'rawDelta', seq: sequence++, text })
               }
@@ -193,7 +221,7 @@ const lumabriPlugin = definePlugin({
           const tail = decoder.finish()
           if (tail) {
             fullText += tail
-            const events = [{ type: 'contentDelta', seq: sequence++, text: tail }]
+            const events: unknown[] = [{ type: 'contentDelta', seq: sequence++, text: tail }]
             if (request.emitRawDeltas) {
               events.push({ type: 'rawDelta', seq: sequence++, text: tail })
             }
@@ -202,7 +230,7 @@ const lumabriPlugin = definePlugin({
           }
 
           const stats = selectStats(result.value)
-          const terminal = []
+          const terminal: unknown[] = []
           if (Object.keys(stats).length) {
             terminal.push({ type: 'completionStats', seq: sequence++, stats })
           }
@@ -220,7 +248,7 @@ const lumabriPlugin = definePlugin({
           }
         } catch (error) {
           const cancelled = error instanceof GatewayCancelledError
-          const terminal = {
+          const terminal: Record<string, unknown> = {
             type: 'completionDone',
             seq: sequence++,
             ...(cancelled
@@ -238,7 +266,7 @@ const lumabriPlugin = definePlugin({
             events: request.stream ? [terminal] : buffered
           }
         } finally {
-          await run.return?.()
+          await run.return({})
         }
       }
     }),

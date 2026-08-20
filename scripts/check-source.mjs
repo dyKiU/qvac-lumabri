@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
-const roots = ['client.js', 'plugin.js', 'lib', 'scripts', 'test']
+const roots = ['src', 'scripts', 'test']
 const files = []
 
 async function walk(relative) {
@@ -17,7 +17,7 @@ async function walk(relative) {
   for (const entry of entries) {
     const child = path.join(relative, entry.name)
     if (entry.isDirectory()) await walk(child)
-    else if (/\.(?:js|mjs)$/.test(entry.name)) files.push(child)
+    else if (/\.(?:js|mjs|ts)$/.test(entry.name)) files.push(child)
   }
 }
 
@@ -26,11 +26,11 @@ for (const entry of roots) await walk(entry)
 for (const file of files) {
   const source = await readFile(path.join(root, file), 'utf8')
   assert(!source.includes('\r'), `${file} contains CRLF bytes`)
-  if (file === 'client.js') {
-    assert(!/from ['"]node:/.test(source), 'client.js must remain usable outside Node')
+  if (file === path.join('src', 'client.ts')) {
+    assert(!/from ['"]node:/.test(source), 'src/client.ts must remain usable outside Node')
   }
 }
 
-assert(files.includes('plugin.js'))
-assert(files.includes(path.join('lib', 'gateway-client.js')))
+assert(files.includes(path.join('src', 'plugin.ts')))
+assert(files.includes(path.join('src', 'lib', 'gateway-client.ts')))
 process.stdout.write(`Source checks: PASS (${files.length} files)\n`)
