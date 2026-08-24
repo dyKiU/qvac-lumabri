@@ -22,9 +22,9 @@ weights stay on Lumabri peers once the swarm has complete expert coverage.
 
 ## Provider pool
 
-QVAC SDK `0.17.1` delegates directly to one provider public key. It does not
-discover equivalent model providers or choose between them. The adapter adds a
-small client-side pool for that policy.
+QVAC SDKs `0.17.1` and `0.18.1` delegate directly to one provider public key.
+They do not discover equivalent model providers or choose between them. The
+adapter adds a small client-side pool for that policy.
 
 ```js
 import { createQvacProviderPool } from '@lumabri/qvac-adapter'
@@ -82,10 +82,10 @@ pool.forgetModel(modelId)
 QVAC itself retains the authoritative model-to-provider binding used for
 completion RPC.
 
-QVAC SDK `0.17.1` delegates built-in completion and unload calls, but not
-custom plugin RPC. `lumabriStatus()` and `cancelLumabri()` therefore apply only
-to local loads in this contract line. Distributed recovery reloads the model on
-another provider and replays full history.
+QVAC SDKs `0.17.1` and `0.18.1` delegate built-in completion and unload calls,
+but not custom plugin RPC. `lumabriStatus()` and `cancelLumabri()` therefore
+apply only to local loads in this contract line. Distributed recovery reloads
+the model on another provider and replays full history.
 
 ## Remote model host over SSH
 

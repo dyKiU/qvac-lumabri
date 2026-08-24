@@ -24,7 +24,6 @@
     {
       "id": "stable-0.1",
       "status": "supported",
-      "primary": true,
       "adapter": "0.1.x",
       "qvac": {
         "sdk": "0.17.1",
@@ -43,6 +42,38 @@
       "colibri": {
         "release": "v1.4.0",
         "sourceRef": "b085b48888a88d9a1c00b151a9979774b72cdbfd"
+      },
+      "proof": [
+        "unit",
+        "bundle",
+        "gateway",
+        "native-build",
+        "token-identity"
+      ]
+    },
+    {
+      "id": "stable-0.1-r2",
+      "status": "supported",
+      "primary": true,
+      "adapter": "0.1.x",
+      "qvac": {
+        "sdk": "0.18.1",
+        "sdkGitHead": "3e961de482a4a5d816be0c4d0e2bb02846efe31a",
+        "cli": "0.12.0",
+        "cliGitHead": "fa5b5510381c7adcef070df86103ca34ff620dd0",
+        "sourceRef": "3e961de482a4a5d816be0c4d0e2bb02846efe31a",
+        "delegatedPluginRpc": false
+      },
+      "gatewayProtocol": 1,
+      "lumabri": {
+        "releaseBase": "v0.8.0",
+        "baseline": "post-v0.8.0",
+        "sourceRef": "d493fb26d370ea9246a11b6b987b13d1bb84133d",
+        "gatewayPatch": "native/lumabri-gateway.patch"
+      },
+      "colibri": {
+        "release": "v1.7.0",
+        "sourceRef": "259858f95e49ccd10fd1e300f73894ce3fafe8e3"
       },
       "proof": [
         "unit",
@@ -77,7 +108,10 @@
       },
       "proof": [
         "unit",
-        "bundle"
+        "bundle",
+        "gateway",
+        "native-build",
+        "token-identity"
       ]
     },
     {
