@@ -71,7 +71,7 @@ jobs:
           repository: JustVugg/colibri
           ref: ${{ matrix.contract.colibri.sourceRef }}
           path: upstream/colibri
-      - run: adapter/scripts/apply-lumabri-gateway.sh upstream/lumabri
+      - run: adapter/scripts/apply-lumabri-gateway.sh upstream/lumabri "${{ matrix.contract.lumabri.gatewayPatch }}"
       - run: make -C upstream/lumabri lumabri liblumabri.so colibri_p2p expert_node_glm ENGINE=../colibri/c
       - run: upstream/lumabri/gateway_test.sh
       - name: Prove local and RPC expert outputs match
@@ -112,7 +112,10 @@ jobs:
         run: |
           if node -e "const p = require('./package.json'); process.exit(p.dependencies?.['@qvac/inference'] ? 0 : 1)"; then
             bun install
-            bun run build
+            # This is an adapter source-compatibility gate. Compile the SDK
+            # artifact without coupling it to unrelated upstream lint status.
+            bun x tsc --project tsconfig.json
+            bun run postcompile:aliases
             bun pm pack --destination "$RUNNER_TEMP"
           else
             npm install --ignore-scripts --no-audit --no-fund

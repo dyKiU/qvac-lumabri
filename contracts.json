@@ -93,7 +93,7 @@
       "gatewayProtocol": 1,
       "lumabri": {
         "sourceRef": "main",
-        "gatewayPatch": "native/lumabri-gateway.patch"
+        "gatewayPatch": "native/lumabri-gateway-main.patch"
       },
       "colibri": {
         "sourceRef": "main"

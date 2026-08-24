@@ -49,7 +49,12 @@ for (const contract of matrix.contracts) {
     'boolean',
     `${contract.id}: delegated plugin RPC capability must be explicit`
   )
-  assert.equal(contract.lumabri.gatewayPatch, 'native/lumabri-gateway.patch')
+  assert.match(
+    contract.lumabri.gatewayPatch,
+    /^native\/[a-z0-9][a-z0-9.-]*\.patch$/,
+    `${contract.id}: invalid Lumabri gateway patch path`
+  )
+  await readFile(new URL(`../${contract.lumabri.gatewayPatch}`, import.meta.url))
   for (const component of ['qvac', 'lumabri', 'colibri']) assertRef(contract, component)
   if (contract.status !== 'edge') {
     assert.match(contract.qvac.sdkGitHead, shaPattern, `${contract.id}: missing QVAC SDK gitHead`)

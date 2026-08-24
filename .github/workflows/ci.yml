@@ -116,7 +116,7 @@ jobs:
           repository: JustVugg/lumabri
           ref: ${{ matrix.contract.lumabri.sourceRef }}
           path: upstream/lumabri
-      - run: adapter/scripts/apply-lumabri-gateway.sh upstream/lumabri
+      - run: adapter/scripts/apply-lumabri-gateway.sh upstream/lumabri "${{ matrix.contract.lumabri.gatewayPatch }}"
       - run: make -C upstream/lumabri lumabri
       - run: upstream/lumabri/gateway_test.sh
 
@@ -145,7 +145,7 @@ jobs:
           repository: JustVugg/colibri
           ref: ${{ matrix.contract.colibri.sourceRef }}
           path: upstream/colibri
-      - run: adapter/scripts/apply-lumabri-gateway.sh upstream/lumabri
+      - run: adapter/scripts/apply-lumabri-gateway.sh upstream/lumabri "${{ matrix.contract.lumabri.gatewayPatch }}"
       - name: Build model host and expert-node sides
         run: make -C upstream/lumabri lumabri liblumabri.so colibri_p2p expert_node_glm ENGINE=../colibri/c
       - name: Prove local and RPC expert outputs match
