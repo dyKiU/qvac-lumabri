@@ -67,7 +67,7 @@ Use `model` plus `tracker` instead of `localDir` for a Lumabri swarm model.
 | Line | Status | Adapter | QVAC SDK / CLI | Gateway | Lumabri | Colibri |
 |---|---|---|---|---|---|---|
 | stable-0.1 | supported | 0.1.x | 0.17.1 / 0.11.0 | v1 | `post-v0.8.0 @ d493fb2` | `v1.4.0 @ b085b48` |
-| dev-next | candidate | main | 0.17.1 / 0.11.0 | v1 | `post-v0.8.0 @ d493fb2` | `v1.6.2 @ 6546cdd` |
+| dev-next | candidate | main | 0.18.1 / 0.12.0 | v1 | `post-v0.8.0 @ d493fb2` | `v1.7.0 @ 259858f` |
 | upstream-head | edge | main | main / main | v1 | `main` | `main` |
 <!-- contracts:end -->
 

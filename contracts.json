@@ -57,11 +57,11 @@
       "status": "candidate",
       "adapter": "main",
       "qvac": {
-        "sdk": "0.17.1",
-        "sdkGitHead": "2d1ed8085cf548b5911e19f3c4500aacb53ccf8a",
-        "cli": "0.11.0",
-        "cliGitHead": "4e3c73d447c17a62ac73f86614b8c15ba74cfc8b",
-        "sourceRef": "2d1ed8085cf548b5911e19f3c4500aacb53ccf8a",
+        "sdk": "0.18.1",
+        "sdkGitHead": "3e961de482a4a5d816be0c4d0e2bb02846efe31a",
+        "cli": "0.12.0",
+        "cliGitHead": "fa5b5510381c7adcef070df86103ca34ff620dd0",
+        "sourceRef": "3e961de482a4a5d816be0c4d0e2bb02846efe31a",
         "delegatedPluginRpc": false
       },
       "gatewayProtocol": 1,
@@ -72,14 +72,12 @@
         "gatewayPatch": "native/lumabri-gateway.patch"
       },
       "colibri": {
-        "release": "v1.6.2",
-        "sourceRef": "6546cdde7296f28771e2ba1a1d7c1d4b0cb550aa"
+        "release": "v1.7.0",
+        "sourceRef": "259858f95e49ccd10fd1e300f73894ce3fafe8e3"
       },
       "proof": [
-        "bundle",
-        "gateway",
-        "native-build",
-        "token-identity"
+        "unit",
+        "bundle"
       ]
     },
     {
