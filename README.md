@@ -97,13 +97,16 @@ failure boundaries, and the physical-host acceptance test.
 npm run typecheck      # strict TypeScript contracts
 npm run build          # emit ESM JavaScript and declarations to dist/
 npm run check          # source, constraints, unit tests
+npm run check:native-upstreams # detect Lumabri/Colibri head or release drift
 npm run check:freshness # compare candidate pins with latest releases
 npm run pack:check     # publish surface
 npm run bundle         # real QVAC Bare worker
 npm run test:qvac      # QVAC -> adapter -> fake gateway
 ```
 
-CI also builds both Lumabri MoE sides against pinned Colibri sources. A weekly
-canary repeats the build against all three upstream `main` branches.
+CI also builds both Lumabri MoE sides against pinned Colibri sources. A daily
+canary detects Lumabri and Colibri head or release drift, then qualifies both
+the candidate pins and upstream `main` branches. QVAC source contracts run as
+a separate canary matrix.
 
 Apache-2.0.
