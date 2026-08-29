@@ -2,8 +2,10 @@ name: Upstream compatibility
 
 on:
   schedule:
-    - cron: '17 4 * * 1'
+    - cron: '17 4 * * *'
   workflow_dispatch:
+  repository_dispatch:
+    types: [colibri-upstream, lumabri-upstream]
 
 permissions:
   contents: read
@@ -33,15 +35,15 @@ jobs:
           echo "canaries=$(node scripts/list-contracts.mjs candidate edge)" >> "$GITHUB_OUTPUT"
           echo "numpy=$(node -p "require('./contracts.json').runtime.numpy")" >> "$GITHUB_OUTPUT"
 
-  candidate-freshness:
-    name: Candidate release freshness
+  native-upstream-state:
+    name: Detect Lumabri / Colibri changes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-      - run: npm run check:freshness
+      - run: npm run check:native-upstreams
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
@@ -73,6 +75,8 @@ jobs:
           path: upstream/colibri
       - run: adapter/scripts/apply-lumabri-gateway.sh upstream/lumabri "${{ matrix.contract.lumabri.gatewayPatch }}"
       - run: make -C upstream/lumabri lumabri liblumabri.so colibri_p2p expert_node_glm ENGINE=../colibri/c
+      - name: Build the engine-neutral Segment integration
+        run: make -C upstream/lumabri segment-direct ENGINE=../colibri/c
       - run: upstream/lumabri/gateway_test.sh
       - name: Prove local and RPC expert outputs match
         shell: bash

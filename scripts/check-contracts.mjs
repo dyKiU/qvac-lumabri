@@ -14,6 +14,13 @@ const shaPattern = /^[0-9a-f]{40}$/
 const exactVersionPattern = /^\d+\.\d+\.\d+$/
 const allowedStatuses = new Set(['supported', 'candidate', 'edge'])
 const requiredProof = new Set(['unit', 'bundle', 'gateway', 'native-build', 'token-identity'])
+const nativeCapabilityFields = [
+  'segmentRuntime',
+  'edgeRuntime',
+  'glm53Text',
+  'glm53Vision',
+  'structuredToolSideband'
+]
 
 function releaseLine(version) {
   const match = /^(\d+)\.(\d+)\.\d+$/.exec(version)
@@ -44,6 +51,14 @@ for (const contract of matrix.contracts) {
   ids.add(contract.id)
   assert(allowedStatuses.has(contract.status), `${contract.id}: invalid status`)
   assert(matrix.gateway.supported.includes(contract.gatewayProtocol), `${contract.id}: unsupported gateway protocol`)
+  assert(contract.nativeCapabilities, `${contract.id}: missing native capabilities`)
+  for (const capability of nativeCapabilityFields) {
+    assert.equal(
+      typeof contract.nativeCapabilities[capability],
+      'boolean',
+      `${contract.id}: native capability ${capability} must be explicit`
+    )
+  }
   assert.equal(
     typeof contract.qvac.delegatedPluginRpc,
     'boolean',
