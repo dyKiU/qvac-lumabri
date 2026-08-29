@@ -111,10 +111,18 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: latest
-      - name: Build and pack upstream SDK
+      - name: Build and pack upstream SDK workspace
         working-directory: upstream/qvac/packages/sdk
         run: |
           if node -e "const p = require('./package.json'); process.exit(p.dependencies?.['@qvac/inference'] ? 0 : 1)"; then
+            pushd ../inference
+            bun install
+            # Keep source-head packages at one commit. The SDK can import
+            # unreleased inference exports before both packages are published.
+            bun x tsc --project tsconfig.build.json --noCheck
+            bun run postcompile:aliases
+            bun pm pack --destination "$RUNNER_TEMP"
+            popd
             bun install
             # This is an adapter source-compatibility gate. Emit the SDK
             # artifact without coupling it to unreleased addon types or lint;
@@ -130,7 +138,11 @@ jobs:
       - name: Exercise adapter against upstream SDK
         working-directory: adapter
         run: |
-          npm install --no-save "$RUNNER_TEMP"/qvac-sdk-*.tgz
+          packages=("$RUNNER_TEMP"/qvac-sdk-*.tgz)
+          if compgen -G "$RUNNER_TEMP/qvac-inference-*.tgz" > /dev/null; then
+            packages+=("$RUNNER_TEMP"/qvac-inference-*.tgz)
+          fi
+          npm install --no-save "${packages[@]}"
           npm run check
           npm run bundle
           npm run verify:bundle
