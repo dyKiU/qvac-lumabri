@@ -1,5 +1,88 @@
+diff --git a/gateway_test.sh b/gateway_test.sh
+new file mode 100755
+index 0000000..2018f4d
+--- /dev/null
++++ b/gateway_test.sh
+@@ -0,0 +1,77 @@
++#!/usr/bin/env bash
++# Machine gateway contract without a real model: both engine dialects,
++# streamed binary-safe deltas, reset-before-generate, stats, and rejection of
++# prompts that would break the engines' one-line protocol.
++set -euo pipefail
++cd "$(dirname "$0")"
++
++make -s lumabri
++T=$(mktemp -d "${TMPDIR:-.}/lumabri-gateway.XXXXXX")
++cleanup() { perl -MFile::Path=remove_tree -e 'remove_tree($ARGV[0])' "$T"; }
++trap cleanup EXIT
++mkdir -p "$T/model"
++printf '{"model_type":"fake"}' > "$T/model/config.json"
++export GATEWAY_TEST_NOFILE="$T/nofile"
++
++cat > "$T/framed" <<'EOF'
++#!/usr/bin/env bash
++ulimit -S -n > "${GATEWAY_TEST_NOFILE:?}"
++printf '\x01\x01READY\x01\x01\nSTAT 0 0.0 0.0 0.0\n'
++while IFS= read -r line; do
++    if [ "$line" = $'\x02RESET' ]; then
++        printf '\x01\x01END\x01\x01\nSTAT 0 0.0 0.0 0.0\n'
++        continue
++    fi
++    printf 'framed: %s 🦜' "$line"
++    printf '\n\x01\x01END\x01\x01\nSTAT 7 4.25 91.5 2.75\n'
++done
++EOF
++chmod +x "$T/framed"
++
++cat > "$T/line" <<'EOF'
++#!/usr/bin/env bash
++printf 'ready\n> '
++while IFS= read -r line; do
++    [ "$line" = /reset ] && continue
++    printf 'line: %s 🦜\n> ' "$line"
++done
++EOF
++chmod +x "$T/line"
++
++run_case() {
++    local engine=$1 expected=$2 output=$3
++    (
++        ulimit -S -n 64
++        {
++            printf '%s\n' '{"v":1,"id":"one","op":"generate","prompt":"aGVsbG8gd29ybGQ="}'
++            printf '%s\n' '{"v":1,"id":"bad","op":"generate","prompt":"YmFkCnByb21wdA=="}'
++            printf '%s\n' '{"v":1,"id":"stop","op":"shutdown"}'
++        } | ./lumabri gateway --local "$T/model" --engine "$engine" > "$output"
++    )
++
++    python3 - "$output" "$expected" <<'PY'
++import base64, json, sys
++
++records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
++assert records[0]["type"] == "ready", records
++deltas = [r for r in records if r.get("id") == "one" and r.get("type") == "delta"]
++text = b"".join(base64.b64decode(r["data"], validate=True) for r in deltas).decode()
++assert text.rstrip("\n") == sys.argv[2], (text, records)
++done = next(r for r in records if r.get("id") == "one" and r.get("type") == "done")
++if records[0]["protocol"] == "framed":
++    assert done["stats"]["generatedTokens"] == 7, done
++    assert done["stats"]["tokensPerSecond"] == 4.25, done
++bad = next(r for r in records if r.get("id") == "bad")
++assert bad["type"] == "error" and "one engine-protocol line" in bad["message"], bad
++assert records[-1]["type"] == "bye", records[-1]
++PY
++}
++
++echo "· framed gateway"
++run_case "$T/framed" "framed: hello world 🦜" "$T/framed.out"
++test "$(cat "$GATEWAY_TEST_NOFILE")" -gt 64
++echo "  ✓ streamed delta, stats, isolation, validation"
++
++echo "· line gateway"
++run_case "$T/line" "line: hello world 🦜" "$T/line.out"
++echo "  ✓ prompt dialect and reset-before-generate"
 diff --git a/lumabri.c b/lumabri.c
-index ab3f050..1a6bf74 100644
+index a477676..2fa1a69 100644
 --- a/lumabri.c
 +++ b/lumabri.c
 @@ -1,7 +1,8 @@
@@ -12,15 +95,15 @@ index ab3f050..1a6bf74 100644
   *
   * `serve` runs the tracker and a maintainer for the given directory.
   * `chat` asks the tracker what is available, mounts the chosen model through
-@@ -24,6 +25,7 @@
-  * where mirroring would mean a second copy of the same bytes.
-  */
+@@ -26,6 +27,7 @@
  #define _GNU_SOURCE
+ #include <arpa/inet.h>
+ #include <dirent.h>
 +#include <errno.h>
  #include <fcntl.h>
+ #include <ifaddrs.h>
  #include <math.h>
- #include <pthread.h>
-@@ -31,6 +33,7 @@
+@@ -35,6 +37,7 @@
  #include <stdarg.h>
  #include <stdint.h>
  #include <sys/ioctl.h>
@@ -28,7 +111,7 @@ index ab3f050..1a6bf74 100644
  #include <sys/stat.h>
  #include <sys/statvfs.h>
  #include <sys/wait.h>
-@@ -38,6 +41,12 @@
+@@ -42,6 +45,12 @@
  #include <time.h>
  #include <unistd.h>
  
@@ -39,9 +122,9 @@ index ab3f050..1a6bf74 100644
 +#endif
 +
  #include "lumabri_proto.h"
+ #include "lumabri_segment_discovery.h"
  #include "lumabri_sign.h"
- #include "lumabri_secure.h"
-@@ -1007,9 +1016,6 @@ static int engine_wait_ready(Engine *e) {
+@@ -1970,9 +1979,6 @@ static int engine_wait_ready(Engine *e) {
      }
  }
  
@@ -51,17 +134,16 @@ index ab3f050..1a6bf74 100644
  /* Some engines (DeepSeek V4) print a dashboard on stdout between the reply text:
   * whole lines like `EMAP 43 256 <hex>`, `TIERS 0 …`, `HITS …`, `HWINFO …`,
   * `PROF …`. They are diagnostics, not generated tokens, and they used to land
-@@ -1021,15 +1027,30 @@ static int engine_wait_ready(Engine *e) {
+@@ -1984,15 +1990,29 @@ static int engine_wait_ready(Engine *e) {
  typedef struct { int mode; char pfx[8]; int pfxn; } TelFilter;
  enum { TF_LINESTART = 0, TF_MID, TF_DROP };
  
 -static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
 +typedef int (*EngineChunkFn)(const void *data, size_t len, void *arg);
 +
-+static int stdout_chunk(const void *data, size_t len, void *arg) {
++static int live_chunk(const void *data, size_t len, void *arg) {
 +    (void)arg;
-+    if (fwrite(data, 1, len, stdout) != len) return -1;
-+    fflush(stdout);
++    live_write(data, len);
 +    return 0;
 +}
 +
@@ -71,7 +153,7 @@ index ab3f050..1a6bf74 100644
      for (size_t i = 0; i < n; i++) {
          char c = p[i];
          if (t->mode == TF_DROP) { if (c == '\n') t->mode = TF_LINESTART; continue; }
--        if (t->mode == TF_MID) { putchar(c); if (c == '\n') t->mode = TF_LINESTART; continue; }
+-        if (t->mode == TF_MID) { live_write(&c, 1); if (c == '\n') t->mode = TF_LINESTART; continue; }
 +        if (t->mode == TF_MID) {
 +            if (sink && sink(&c, 1, arg)) return -1;
 +            if (c == '\n') t->mode = TF_LINESTART;
@@ -79,23 +161,22 @@ index ab3f050..1a6bf74 100644
 +        }
          /* TF_LINESTART: buffer until we can classify the line */
          if (c == '\n') {                       /* short line, can't be a dashboard row */
--            fwrite(t->pfx, 1, (size_t)t->pfxn, stdout); putchar('\n');
+-            live_write(t->pfx, (size_t)t->pfxn); live_write("\n", 1);
 +            if (sink && (sink(t->pfx, (size_t)t->pfxn, arg) || sink("\n", 1, arg)))
 +                return -1;
              t->pfxn = 0; continue;
          }
          if (t->pfxn < (int)sizeof t->pfx) t->pfx[t->pfxn++] = c;
-@@ -1045,23 +1066,27 @@ static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
+@@ -2008,21 +2028,27 @@ static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
          }
          if (is_tel) { t->pfxn = 0; t->mode = TF_DROP; }
          else if (!maybe || t->pfxn == (int)sizeof t->pfx) {   /* ruled out: it is text */
--            fwrite(t->pfx, 1, (size_t)t->pfxn, stdout);
+-            live_write(t->pfx, (size_t)t->pfxn);
 +            if (sink && sink(t->pfx, (size_t)t->pfxn, arg)) return -1;
              t->pfxn = 0; t->mode = TF_MID;
          }
          /* else: keep buffering (a keyword prefix so far) */
      }
--    fflush(stdout);
 +    return 0;
  }
  
@@ -103,11 +184,10 @@ index ab3f050..1a6bf74 100644
 +static int le_flush_tel(TelFilter *t, EngineChunkFn sink, void *arg) {
 +    /* trailing buffered text at stream end */
      if (t->mode == TF_LINESTART && t->pfxn > 0) {
--        fwrite(t->pfx, 1, (size_t)t->pfxn, stdout);
+-        live_write(t->pfx, (size_t)t->pfxn);
 +        if (sink && sink(t->pfx, (size_t)t->pfxn, arg)) return -1;
          t->pfxn = 0;
      }
--    fflush(stdout);
 +    return 0;
  }
  
@@ -119,7 +199,7 @@ index ab3f050..1a6bf74 100644
      const char *S = FRAME_END;
      size_t SL = strlen(S), cap = 8192, len = 0, shown = 0;
      char *buf = malloc(cap), *hit = NULL;
-@@ -1083,12 +1108,15 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -2044,12 +2070,15 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
          /* hold back SL-1 bytes: a sentinel may straddle two reads */
          size_t safe = hit ? (size_t)(hit - buf) : (len > SL ? len - SL : 0);
          if (safe > shown) {
@@ -137,23 +217,25 @@ index ab3f050..1a6bf74 100644
      size_t after = (size_t)(hit - buf) + SL;
      char rest[256];
      size_t rl = len > after ? len - after : 0;
-@@ -1110,6 +1138,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -2071,6 +2100,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
      }
  }
  
 +/* The terminal UI's original behavior, now a thin sink wrapper. */
 +static int stream_until_end(Engine *e, char *statline, size_t scap) {
-+    return stream_until_end_to(e, statline, scap, stdout_chunk, NULL);
++    return stream_until_end_to(e, statline, scap, live_chunk, NULL);
 +}
 +
  /* ---- serve codec (PROTO_SERVE2) client — DeepSeek V4 --------------------- */
  typedef struct { int fd; unsigned char b[16384]; size_t off, len; } SReader;
  
-@@ -1409,7 +1442,15 @@ static int engine_spawn(const char *engine, const char *shim, const char *tracke
+@@ -2468,8 +2502,17 @@ static int segment_engine_spawn(const char *engine, const char *shim,
  /* Why the child is gone, in the words of the kernel and of the child. */
  static void engine_diag(Engine *e, int booting) {
      int st = 0;
 -    if (e->pid > 0 && waitpid(e->pid, &st, WNOHANG) == e->pid) {
+-        if (g_signal_engine_pid == (sig_atomic_t)e->pid)
++    pid_t engine_pid = e->pid;
 +    pid_t waited = e->pid > 0 ? waitpid(e->pid, &st, WNOHANG) : -1;
 +    /* EOF on the child's stdout can win the scheduler race with process
 +     * reaping (especially on macOS). Give the kernel a bounded moment to
@@ -163,10 +245,11 @@ index ab3f050..1a6bf74 100644
 +        waited = waitpid(e->pid, &st, WNOHANG);
 +    }
 +    if (e->pid > 0 && waited == e->pid) {
++        if (g_signal_engine_pid == (sig_atomic_t)engine_pid)
+             g_signal_engine_pid = 0;
          e->pid = 0;
          if (WIFSIGNALED(st)) {
-             int s = WTERMSIG(st);
-@@ -2569,6 +2610,420 @@ static int cmd_chat(int argc, char **argv) {
+@@ -3947,6 +3990,420 @@ static int cmd_chat(int argc, char **argv) {
      return 0;
  }
  
@@ -587,7 +670,7 @@ index ab3f050..1a6bf74 100644
  /* ---- key: the operator's identity ---------------------------------------
   * Ed25519 keypair. The secret signs the swarm's ground truth and belongs
   * only on the machine that owns the model — ideally offline, since the
-@@ -2680,6 +3135,8 @@ int main(int argc, char **argv) {
+@@ -4058,6 +4515,8 @@ int main(int argc, char **argv) {
      }
      if (argc >= 2 && !strcmp(argv[1], "serve")) return cmd_serve(argc - 2, argv + 2);
      if (argc >= 2 && !strcmp(argv[1], "chat"))  return cmd_chat(argc - 2, argv + 2);
@@ -596,7 +679,7 @@ index ab3f050..1a6bf74 100644
      /* No arguments and a terminal: this is a person, not a script. Chat is
       * the only thing a person wants by default, and everything it needs is
       * either remembered or asked for in the panel. */
-@@ -2690,6 +3147,7 @@ int main(int argc, char **argv) {
+@@ -4068,6 +4527,7 @@ int main(int argc, char **argv) {
          "  lumabri peer-key                                           print this machine's endpoint identity\n"
          "  lumabri serve --model DIR [--port 7300] [--join TRACKER]   share a model\n"
          "  lumabri chat  [--tracker HOST:7300] [--model NAME]         chat with it\n"
@@ -604,86 +687,3 @@ index ab3f050..1a6bf74 100644
          "  lumabri key   [--out NAME]                                 operator keypair\n");
      return 2;
  }
-diff --git a/gateway_test.sh b/gateway_test.sh
-new file mode 100755
-index 0000000..2018f4d
---- /dev/null
-+++ b/gateway_test.sh
-@@ -0,0 +1,77 @@
-+#!/usr/bin/env bash
-+# Machine gateway contract without a real model: both engine dialects,
-+# streamed binary-safe deltas, reset-before-generate, stats, and rejection of
-+# prompts that would break the engines' one-line protocol.
-+set -euo pipefail
-+cd "$(dirname "$0")"
-+
-+make -s lumabri
-+T=$(mktemp -d "${TMPDIR:-.}/lumabri-gateway.XXXXXX")
-+cleanup() { perl -MFile::Path=remove_tree -e 'remove_tree($ARGV[0])' "$T"; }
-+trap cleanup EXIT
-+mkdir -p "$T/model"
-+printf '{"model_type":"fake"}' > "$T/model/config.json"
-+export GATEWAY_TEST_NOFILE="$T/nofile"
-+
-+cat > "$T/framed" <<'EOF'
-+#!/usr/bin/env bash
-+ulimit -S -n > "${GATEWAY_TEST_NOFILE:?}"
-+printf '\x01\x01READY\x01\x01\nSTAT 0 0.0 0.0 0.0\n'
-+while IFS= read -r line; do
-+    if [ "$line" = $'\x02RESET' ]; then
-+        printf '\x01\x01END\x01\x01\nSTAT 0 0.0 0.0 0.0\n'
-+        continue
-+    fi
-+    printf 'framed: %s 🦜' "$line"
-+    printf '\n\x01\x01END\x01\x01\nSTAT 7 4.25 91.5 2.75\n'
-+done
-+EOF
-+chmod +x "$T/framed"
-+
-+cat > "$T/line" <<'EOF'
-+#!/usr/bin/env bash
-+printf 'ready\n> '
-+while IFS= read -r line; do
-+    [ "$line" = /reset ] && continue
-+    printf 'line: %s 🦜\n> ' "$line"
-+done
-+EOF
-+chmod +x "$T/line"
-+
-+run_case() {
-+    local engine=$1 expected=$2 output=$3
-+    (
-+        ulimit -S -n 64
-+        {
-+            printf '%s\n' '{"v":1,"id":"one","op":"generate","prompt":"aGVsbG8gd29ybGQ="}'
-+            printf '%s\n' '{"v":1,"id":"bad","op":"generate","prompt":"YmFkCnByb21wdA=="}'
-+            printf '%s\n' '{"v":1,"id":"stop","op":"shutdown"}'
-+        } | ./lumabri gateway --local "$T/model" --engine "$engine" > "$output"
-+    )
-+
-+    python3 - "$output" "$expected" <<'PY'
-+import base64, json, sys
-+
-+records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-+assert records[0]["type"] == "ready", records
-+deltas = [r for r in records if r.get("id") == "one" and r.get("type") == "delta"]
-+text = b"".join(base64.b64decode(r["data"], validate=True) for r in deltas).decode()
-+assert text.rstrip("\n") == sys.argv[2], (text, records)
-+done = next(r for r in records if r.get("id") == "one" and r.get("type") == "done")
-+if records[0]["protocol"] == "framed":
-+    assert done["stats"]["generatedTokens"] == 7, done
-+    assert done["stats"]["tokensPerSecond"] == 4.25, done
-+bad = next(r for r in records if r.get("id") == "bad")
-+assert bad["type"] == "error" and "one engine-protocol line" in bad["message"], bad
-+assert records[-1]["type"] == "bye", records[-1]
-+PY
-+}
-+
-+echo "· framed gateway"
-+run_case "$T/framed" "framed: hello world 🦜" "$T/framed.out"
-+test "$(cat "$GATEWAY_TEST_NOFILE")" -gt 64
-+echo "  ✓ streamed delta, stats, isolation, validation"
-+
-+echo "· line gateway"
-+run_case "$T/line" "line: hello world 🦜" "$T/line.out"
-+echo "  ✓ prompt dialect and reset-before-generate"

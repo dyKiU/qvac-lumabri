@@ -68,7 +68,7 @@ Use `model` plus `tracker` instead of `localDir` for a Lumabri swarm model.
 |---|---|---|---|---|---|---|
 | stable-0.1 | supported | 0.1.x | 0.17.1 / 0.11.0 | v1 | `post-v0.8.0 @ d493fb2` | `v1.4.0 @ b085b48` |
 | stable-0.1-r2 | supported | 0.1.x | 0.18.1 / 0.12.0 | v1 | `post-v0.8.0 @ d493fb2` | `v1.7.0 @ 259858f` |
-| dev-next | candidate | main | 0.18.1 / 0.12.0 | v1 | `post-v0.8.0 @ d493fb2` | `v1.7.0 @ 259858f` |
+| dev-next | candidate | main | 0.18.1 / 0.12.0 | v1 | `post-v0.8.0 @ 07847c6` | `v1.9.0 @ 184e052` |
 | upstream-head | edge | main | main / main | v1 | `main` | `main` |
 <!-- contracts:end -->
 
@@ -97,13 +97,16 @@ failure boundaries, and the physical-host acceptance test.
 npm run typecheck      # strict TypeScript contracts
 npm run build          # emit ESM JavaScript and declarations to dist/
 npm run check          # source, constraints, unit tests
+npm run check:native-upstreams # detect Lumabri/Colibri head or release drift
 npm run check:freshness # compare candidate pins with latest releases
 npm run pack:check     # publish surface
 npm run bundle         # real QVAC Bare worker
 npm run test:qvac      # QVAC -> adapter -> fake gateway
 ```
 
-CI also builds both Lumabri MoE sides against pinned Colibri sources. A weekly
-canary repeats the build against all three upstream `main` branches.
+CI also builds both Lumabri MoE sides against pinned Colibri sources. A daily
+canary detects Lumabri and Colibri head or release drift, then qualifies both
+the candidate pins and upstream `main` branches. QVAC source contracts run as
+a separate canary matrix.
 
 Apache-2.0.

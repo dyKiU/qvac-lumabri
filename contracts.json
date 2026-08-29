@@ -34,6 +34,13 @@
         "delegatedPluginRpc": false
       },
       "gatewayProtocol": 1,
+      "nativeCapabilities": {
+        "segmentRuntime": false,
+        "edgeRuntime": false,
+        "glm53Text": false,
+        "glm53Vision": false,
+        "structuredToolSideband": false
+      },
       "lumabri": {
         "baseline": "post-v0.8.0",
         "sourceRef": "d493fb26d370ea9246a11b6b987b13d1bb84133d",
@@ -65,6 +72,13 @@
         "delegatedPluginRpc": false
       },
       "gatewayProtocol": 1,
+      "nativeCapabilities": {
+        "segmentRuntime": false,
+        "edgeRuntime": false,
+        "glm53Text": false,
+        "glm53Vision": false,
+        "structuredToolSideband": false
+      },
       "lumabri": {
         "releaseBase": "v0.8.0",
         "baseline": "post-v0.8.0",
@@ -96,15 +110,22 @@
         "delegatedPluginRpc": false
       },
       "gatewayProtocol": 1,
+      "nativeCapabilities": {
+        "segmentRuntime": true,
+        "edgeRuntime": false,
+        "glm53Text": false,
+        "glm53Vision": false,
+        "structuredToolSideband": false
+      },
       "lumabri": {
         "releaseBase": "v0.8.0",
         "baseline": "post-v0.8.0",
-        "sourceRef": "d493fb26d370ea9246a11b6b987b13d1bb84133d",
-        "gatewayPatch": "native/lumabri-gateway.patch"
+        "sourceRef": "07847c6e2b1be12d93e11098fc26cc1a8e03e247",
+        "gatewayPatch": "native/lumabri-gateway-main.patch"
       },
       "colibri": {
-        "release": "v1.7.0",
-        "sourceRef": "259858f95e49ccd10fd1e300f73894ce3fafe8e3"
+        "release": "v1.9.0",
+        "sourceRef": "184e05221a43b3bbeb3321e3438c067b3a46e202"
       },
       "proof": [
         "unit",
@@ -125,6 +146,13 @@
         "delegatedPluginRpc": false
       },
       "gatewayProtocol": 1,
+      "nativeCapabilities": {
+        "segmentRuntime": true,
+        "edgeRuntime": false,
+        "glm53Text": false,
+        "glm53Vision": false,
+        "structuredToolSideband": false
+      },
       "lumabri": {
         "sourceRef": "main",
         "gatewayPatch": "native/lumabri-gateway-main.patch"
