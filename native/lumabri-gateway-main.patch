@@ -82,7 +82,7 @@ index 0000000..2018f4d
 +run_case "$T/line" "line: hello world 🦜" "$T/line.out"
 +echo "  ✓ prompt dialect and reset-before-generate"
 diff --git a/lumabri.c b/lumabri.c
-index a477676..2fa1a69 100644
+index 2080b1a..5ececf3 100644
 --- a/lumabri.c
 +++ b/lumabri.c
 @@ -1,7 +1,8 @@
@@ -122,9 +122,9 @@ index a477676..2fa1a69 100644
 +#endif
 +
  #include "lumabri_proto.h"
+ #include "lumabri_machine.h"
  #include "lumabri_segment_discovery.h"
- #include "lumabri_sign.h"
-@@ -1970,9 +1979,6 @@ static int engine_wait_ready(Engine *e) {
+@@ -2042,9 +2051,6 @@ static int engine_wait_ready(Engine *e) {
      }
  }
  
@@ -134,7 +134,7 @@ index a477676..2fa1a69 100644
  /* Some engines (DeepSeek V4) print a dashboard on stdout between the reply text:
   * whole lines like `EMAP 43 256 <hex>`, `TIERS 0 …`, `HITS …`, `HWINFO …`,
   * `PROF …`. They are diagnostics, not generated tokens, and they used to land
-@@ -1984,15 +1990,29 @@ static int engine_wait_ready(Engine *e) {
+@@ -2056,15 +2062,29 @@ static int engine_wait_ready(Engine *e) {
  typedef struct { int mode; char pfx[8]; int pfxn; } TelFilter;
  enum { TF_LINESTART = 0, TF_MID, TF_DROP };
  
@@ -167,7 +167,7 @@ index a477676..2fa1a69 100644
              t->pfxn = 0; continue;
          }
          if (t->pfxn < (int)sizeof t->pfx) t->pfx[t->pfxn++] = c;
-@@ -2008,21 +2028,27 @@ static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
+@@ -2080,21 +2100,27 @@ static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
          }
          if (is_tel) { t->pfxn = 0; t->mode = TF_DROP; }
          else if (!maybe || t->pfxn == (int)sizeof t->pfx) {   /* ruled out: it is text */
@@ -199,7 +199,7 @@ index a477676..2fa1a69 100644
      const char *S = FRAME_END;
      size_t SL = strlen(S), cap = 8192, len = 0, shown = 0;
      char *buf = malloc(cap), *hit = NULL;
-@@ -2044,12 +2070,15 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -2116,12 +2142,15 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
          /* hold back SL-1 bytes: a sentinel may straddle two reads */
          size_t safe = hit ? (size_t)(hit - buf) : (len > SL ? len - SL : 0);
          if (safe > shown) {
@@ -217,7 +217,7 @@ index a477676..2fa1a69 100644
      size_t after = (size_t)(hit - buf) + SL;
      char rest[256];
      size_t rl = len > after ? len - after : 0;
-@@ -2071,6 +2100,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -2143,6 +2172,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
      }
  }
  
@@ -229,7 +229,7 @@ index a477676..2fa1a69 100644
  /* ---- serve codec (PROTO_SERVE2) client — DeepSeek V4 --------------------- */
  typedef struct { int fd; unsigned char b[16384]; size_t off, len; } SReader;
  
-@@ -2468,8 +2502,17 @@ static int segment_engine_spawn(const char *engine, const char *shim,
+@@ -2540,8 +2574,17 @@ static int segment_engine_spawn(const char *engine, const char *shim,
  /* Why the child is gone, in the words of the kernel and of the child. */
  static void engine_diag(Engine *e, int booting) {
      int st = 0;
@@ -249,7 +249,7 @@ index a477676..2fa1a69 100644
              g_signal_engine_pid = 0;
          e->pid = 0;
          if (WIFSIGNALED(st)) {
-@@ -3947,6 +3990,420 @@ static int cmd_chat(int argc, char **argv) {
+@@ -4066,6 +4109,420 @@ static int cmd_chat(int argc, char **argv) {
      return 0;
  }
  
@@ -670,8 +670,8 @@ index a477676..2fa1a69 100644
  /* ---- key: the operator's identity ---------------------------------------
   * Ed25519 keypair. The secret signs the swarm's ground truth and belongs
   * only on the machine that owns the model — ideally offline, since the
-@@ -4058,6 +4515,8 @@ int main(int argc, char **argv) {
-     }
+@@ -4424,6 +4881,8 @@ int main(int argc, char **argv) {
+         return cmd_doctor(argc - 2, argv + 2);
      if (argc >= 2 && !strcmp(argv[1], "serve")) return cmd_serve(argc - 2, argv + 2);
      if (argc >= 2 && !strcmp(argv[1], "chat"))  return cmd_chat(argc - 2, argv + 2);
 +    if (argc >= 2 && !strcmp(argv[1], "gateway"))
@@ -679,7 +679,7 @@ index a477676..2fa1a69 100644
      /* No arguments and a terminal: this is a person, not a script. Chat is
       * the only thing a person wants by default, and everything it needs is
       * either remembered or asked for in the panel. */
-@@ -4068,6 +4527,7 @@ int main(int argc, char **argv) {
+@@ -4437,6 +4896,7 @@ int main(int argc, char **argv) {
          "  lumabri peer-key                                           print this machine's endpoint identity\n"
          "  lumabri serve --model DIR [--port 7300] [--join TRACKER]   share a model\n"
          "  lumabri chat  [--tracker HOST:7300] [--model NAME]         chat with it\n"

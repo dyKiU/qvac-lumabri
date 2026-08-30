@@ -6,7 +6,7 @@ import { nativeUpstreamChanges } from '../scripts/check-native-upstreams.mjs'
 const candidate = {
   lumabri: {
     releaseBase: 'v0.8.0',
-    sourceRef: '07847c6e2b1be12d93e11098fc26cc1a8e03e247'
+    sourceRef: 'ff9275bd4522622ac54957815d07ede1f3c083c8'
   },
   colibri: {
     release: 'v1.9.0',
@@ -16,7 +16,7 @@ const candidate = {
 
 const current = {
   lumabri: {
-    head: '07847c6e2b1be12d93e11098fc26cc1a8e03e247',
+    head: 'ff9275bd4522622ac54957815d07ede1f3c083c8',
     release: 'v0.8.0'
   },
   colibri: {
