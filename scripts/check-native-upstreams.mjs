@@ -8,7 +8,9 @@ export function nativeUpstreamChanges(candidate, current) {
     const expectedRelease = component === 'lumabri'
       ? candidate.lumabri.releaseBase
       : candidate.colibri.release
-    const expectedHead = candidate[component].sourceRef
+    // A released Colibri candidate stays pinned to the release commit while
+    // its separately recorded head proves that the edge canary saw main.
+    const expectedHead = candidate[component].headRef ?? candidate[component].sourceRef
 
     if (current[component].head !== expectedHead) {
       changes.push({
@@ -26,11 +28,11 @@ export function nativeUpstreamChanges(candidate, current) {
         actual: current[component].release
       })
     }
-    if (component === 'colibri' && current.colibri.releaseRef !== expectedHead) {
+    if (component === 'colibri' && current.colibri.releaseRef !== candidate.colibri.sourceRef) {
       changes.push({
         component,
         kind: 'release-ref',
-        expected: expectedHead,
+        expected: candidate.colibri.sourceRef,
         actual: current.colibri.releaseRef
       })
     }

@@ -1,6 +1,64 @@
+diff --git a/engine_patches/deepseek_v4_p2p.py b/engine_patches/deepseek_v4_p2p.py
+index 84cf713..0eb1f18 100644
+--- a/engine_patches/deepseek_v4_p2p.py
++++ b/engine_patches/deepseek_v4_p2p.py
+@@ -43,8 +43,12 @@ def main():
+         # Decide remotely here instead: on success the routed partial lands in
+         # a buffer, `selected` becomes 0 before a single loader starts, and
+         # site 2b adds the buffer where the local loop would have accumulated.
+-        ('    if (!result && selected != topk) result = -1;\n',
+-         '    if (!result && selected != topk) result = -1;\n'
++        ('    if (!result && selected != topk)\n'
++         '        result = moe_fail("layer %d: routing selected %d experts, wanted %d",\n'
++         '                          weights->plan.layer, selected, topk);\n',
++         '    if (!result && selected != topk)\n'
++         '        result = moe_fail("layer %d: routing selected %d experts, wanted %d",\n'
++         '                          weights->plan.layer, selected, topk);\n'
+          '#ifdef LUMABRI_P2P\n'
+          '    float *lumi_partial = NULL;\n'
+          '    if (!result && lumi_v4_bridge_on(weights->plan.layer)) {\n'
+diff --git a/engine_patches/make_patches.py b/engine_patches/make_patches.py
+index 121557a..6dbc81f 100755
+--- a/engine_patches/make_patches.py
++++ b/engine_patches/make_patches.py
+@@ -251,24 +251,26 @@ fail:
+ # has a SHARED expert after the routed loop, plus a CUDA tier branch behind
+ # qt_ready() (a stub returning 0 without COLI_CUDA). So the hook must NOT
+ # `continue` — it delegates the K routed experts and lets the shared expert and
+-# the row's tail run locally. It lands right after `int shared_done = 0;` and
+-# ends in `} else`, so it becomes an `else if` in front of the qt_ready() branch:
+-# the CPU path delegates, shared_done stays 0, and the shared expert still adds
+-# itself to `out`. Without the macro the added lines vanish and qt_ready() is a
+-# plain `if` again.
++# the row's tail run locally. It lands in the `else` between the batched CPU
++# path and the CUDA tier, so successful delegation skips both routed-expert
++# paths while the shared expert still adds itself to `out`. Without the macro
++# the added branch vanishes and the original `else if (use_qt)` remains.
+ # --------------------------------------------------------------------------
+ QWEN36 = [
+-    hook('#include "qwen36_tier.h"   /* optional transparent Vulkan compute backend for MoE experts */\n',
++    hook('#include "qwen36_tier.h"   /* optional CUDA VRAM expert tier */\n',
+          INCLUDE),
+     hook("    m->dense_load_s = now_s() - t0;\n", """#ifdef LUMIBRI_P2P
+     lumi_init(c->n_layers, c->n_experts, c->hidden);
+     atexit(lumi_report);
+ #endif
+ """),
+-    hook("        if (use_qt) {\n", """#ifdef LUMIBRI_P2P
++    hook("""        if (use_xf) {
++            for (int kk = 0; kk < K; kk++) { xidx[s*K+kk] = idx[kk]; xval[s*K+kk] = val[kk]; }
++        } else""", """
++#ifdef LUMIBRI_P2P
+         if (lumi_layer_on(layer) &&   /* shared expert remains local */
+             lumi_moe_apply(layer, idx, val, K, xs, D, out + (int64_t)s*D)) {
+         } else
+ #endif
+-""", where="before"),
++       """),
+ ]
 diff --git a/gateway_test.sh b/gateway_test.sh
 new file mode 100755
-index 0000000..2018f4d
+index 0000000..2371859
 --- /dev/null
 +++ b/gateway_test.sh
 @@ -0,0 +1,77 @@
@@ -16,7 +74,7 @@ index 0000000..2018f4d
 +cleanup() { perl -MFile::Path=remove_tree -e 'remove_tree($ARGV[0])' "$T"; }
 +trap cleanup EXIT
 +mkdir -p "$T/model"
-+printf '{"model_type":"fake"}' > "$T/model/config.json"
++printf '{"model_type":"glm"}' > "$T/model/config.json"
 +export GATEWAY_TEST_NOFILE="$T/nofile"
 +
 +cat > "$T/framed" <<'EOF'
@@ -82,28 +140,26 @@ index 0000000..2018f4d
 +run_case "$T/line" "line: hello world 🦜" "$T/line.out"
 +echo "  ✓ prompt dialect and reset-before-generate"
 diff --git a/lumabri.c b/lumabri.c
-index 2080b1a..5ececf3 100644
+index ee94002..7558da8 100644
 --- a/lumabri.c
 +++ b/lumabri.c
-@@ -1,7 +1,8 @@
--/* lumabri.c — the lumabri front end: one binary, two roles.
-+/* lumabri.c — the lumabri front end: one binary, three roles.
-  *
+@@ -3,6 +3,7 @@
   *   lumabri serve --model DIR      share a model with the swarm
-  *   lumabri chat                   chat with a model that lives on the swarm
+  *   lumabri                       open the household workspace
+  *   lumabri chat --tracker H:P    use the advanced swarm chat path
 + *   lumabri gateway                expose chat as an NDJSON process protocol
   *
   * `serve` runs the tracker and a maintainer for the given directory.
   * `chat` asks the tracker what is available, mounts the chosen model through
-@@ -26,6 +27,7 @@
- #define _GNU_SOURCE
+@@ -33,6 +34,7 @@
+ #include "lumabri_home_net.h"
  #include <arpa/inet.h>
  #include <dirent.h>
 +#include <errno.h>
  #include <fcntl.h>
  #include <ifaddrs.h>
  #include <math.h>
-@@ -35,6 +37,7 @@
+@@ -45,6 +47,7 @@
  #include <stdarg.h>
  #include <stdint.h>
  #include <sys/ioctl.h>
@@ -111,7 +167,7 @@ index 2080b1a..5ececf3 100644
  #include <sys/stat.h>
  #include <sys/statvfs.h>
  #include <sys/wait.h>
-@@ -42,6 +45,12 @@
+@@ -52,6 +55,12 @@
  #include <time.h>
  #include <unistd.h>
  
@@ -122,9 +178,9 @@ index 2080b1a..5ececf3 100644
 +#endif
 +
  #include "lumabri_proto.h"
- #include "lumabri_machine.h"
- #include "lumabri_segment_discovery.h"
-@@ -2042,9 +2051,6 @@ static int engine_wait_ready(Engine *e) {
+ #include "lumabri_families.h"
+ #include "lumabri_cluster.h"
+@@ -2527,9 +2536,6 @@ static int engine_wait_ready(Engine *e) {
      }
  }
  
@@ -134,7 +190,7 @@ index 2080b1a..5ececf3 100644
  /* Some engines (DeepSeek V4) print a dashboard on stdout between the reply text:
   * whole lines like `EMAP 43 256 <hex>`, `TIERS 0 …`, `HITS …`, `HWINFO …`,
   * `PROF …`. They are diagnostics, not generated tokens, and they used to land
-@@ -2056,15 +2062,29 @@ static int engine_wait_ready(Engine *e) {
+@@ -2541,15 +2547,29 @@ static int engine_wait_ready(Engine *e) {
  typedef struct { int mode; char pfx[8]; int pfxn; } TelFilter;
  enum { TF_LINESTART = 0, TF_MID, TF_DROP };
  
@@ -167,7 +223,7 @@ index 2080b1a..5ececf3 100644
              t->pfxn = 0; continue;
          }
          if (t->pfxn < (int)sizeof t->pfx) t->pfx[t->pfxn++] = c;
-@@ -2080,21 +2100,27 @@ static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
+@@ -2565,21 +2585,27 @@ static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
          }
          if (is_tel) { t->pfxn = 0; t->mode = TF_DROP; }
          else if (!maybe || t->pfxn == (int)sizeof t->pfx) {   /* ruled out: it is text */
@@ -199,7 +255,7 @@ index 2080b1a..5ececf3 100644
      const char *S = FRAME_END;
      size_t SL = strlen(S), cap = 8192, len = 0, shown = 0;
      char *buf = malloc(cap), *hit = NULL;
-@@ -2116,12 +2142,15 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -2601,12 +2627,15 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
          /* hold back SL-1 bytes: a sentinel may straddle two reads */
          size_t safe = hit ? (size_t)(hit - buf) : (len > SL ? len - SL : 0);
          if (safe > shown) {
@@ -217,7 +273,7 @@ index 2080b1a..5ececf3 100644
      size_t after = (size_t)(hit - buf) + SL;
      char rest[256];
      size_t rl = len > after ? len - after : 0;
-@@ -2143,6 +2172,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -2628,6 +2657,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
      }
  }
  
@@ -229,28 +285,8 @@ index 2080b1a..5ececf3 100644
  /* ---- serve codec (PROTO_SERVE2) client — DeepSeek V4 --------------------- */
  typedef struct { int fd; unsigned char b[16384]; size_t off, len; } SReader;
  
-@@ -2540,8 +2574,17 @@ static int segment_engine_spawn(const char *engine, const char *shim,
- /* Why the child is gone, in the words of the kernel and of the child. */
- static void engine_diag(Engine *e, int booting) {
-     int st = 0;
--    if (e->pid > 0 && waitpid(e->pid, &st, WNOHANG) == e->pid) {
--        if (g_signal_engine_pid == (sig_atomic_t)e->pid)
-+    pid_t engine_pid = e->pid;
-+    pid_t waited = e->pid > 0 ? waitpid(e->pid, &st, WNOHANG) : -1;
-+    /* EOF on the child's stdout can win the scheduler race with process
-+     * reaping (especially on macOS). Give the kernel a bounded moment to
-+     * publish the exit status so diagnostics retain the real code. */
-+    for (int i = 0; booting && waited == 0 && i < 50; i++) {
-+        usleep(10 * 1000);
-+        waited = waitpid(e->pid, &st, WNOHANG);
-+    }
-+    if (e->pid > 0 && waited == e->pid) {
-+        if (g_signal_engine_pid == (sig_atomic_t)engine_pid)
-             g_signal_engine_pid = 0;
-         e->pid = 0;
-         if (WIFSIGNALED(st)) {
-@@ -4066,6 +4109,420 @@ static int cmd_chat(int argc, char **argv) {
-     return 0;
+@@ -5123,6 +5157,427 @@ static int cmd_chat(int argc, char **argv) {
+     return chat_failed;
  }
  
 +/* ---- gateway: a process boundary for QVAC and other hosts --------------
@@ -315,7 +351,7 @@ index 2080b1a..5ececf3 100644
 +    return 0;
 +}
 +
-+static void json_string(FILE *out, const char *s) {
++static void gateway_json_string(FILE *out, const char *s) {
 +    fputc('"', out);
 +    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
 +        switch (*p) {
@@ -450,8 +486,8 @@ index 2080b1a..5ececf3 100644
 +}
 +
 +static void gateway_error(const char *id, const char *message) {
-+    fputs("{\"v\":1,\"id\":", stdout); json_string(stdout, id ? id : "");
-+    fputs(",\"type\":\"error\",\"message\":", stdout); json_string(stdout, message);
++    fputs("{\"v\":1,\"id\":", stdout); gateway_json_string(stdout, id ? id : "");
++    fputs(",\"type\":\"error\",\"message\":", stdout); gateway_json_string(stdout, message);
 +    fputs("}\n", stdout); fflush(stdout);
 +}
 +
@@ -485,10 +521,17 @@ index 2080b1a..5ececf3 100644
 +        fprintf(stderr, "lumabri gateway: engine not found: %s\n", c->engine);
 +        return -1;
 +    }
++    const char *expected_engine = engine_for(mtype);
++    EngKind expected_kind = engine_kind_of(expected_engine);
++    if (!expected_engine || expected_kind == EK_INVALID) {
++        fprintf(stderr, "lumabri gateway: unsupported model_type: %s\n",
++                mtype[0] ? mtype : "(missing)");
++        return -1;
++    }
 +    g_eng.booting = 1;
 +    g_eng.last_out = nowd();
 +    if (engine_spawn(c->engine, c->shim, c->tracker, c->model, c->local_dir,
-+                     c->ctx, c->max_new, c->cap_experts, e)) {
++                     c->ctx, c->max_new, c->cap_experts, expected_kind, e)) {
 +        g_eng.booting = 0;
 +        fprintf(stderr, "lumabri gateway: cannot spawn engine\n");
 +        return -1;
@@ -613,8 +656,8 @@ index 2080b1a..5ececf3 100644
 +    Engine e = {0};
 +    if (gateway_boot_engine(&c, &e)) return 1;
 +    fputs("{\"v\":1,\"type\":\"ready\",\"protocol\":", stdout);
-+    json_string(stdout, e.proto == PROTO_FRAMED ? "framed" : "line");
-+    fputs(",\"model\":", stdout); json_string(stdout, c.model);
++    gateway_json_string(stdout, e.proto == PROTO_FRAMED ? "framed" : "line");
++    fputs(",\"model\":", stdout); gateway_json_string(stdout, c.model);
 +    fputs("}\n", stdout); fflush(stdout);
 +
 +    int rc = 0;
@@ -670,16 +713,16 @@ index 2080b1a..5ececf3 100644
  /* ---- key: the operator's identity ---------------------------------------
   * Ed25519 keypair. The secret signs the swarm's ground truth and belongs
   * only on the machine that owns the model — ideally offline, since the
-@@ -4424,6 +4881,8 @@ int main(int argc, char **argv) {
-         return cmd_doctor(argc - 2, argv + 2);
+@@ -6075,6 +6530,8 @@ int main(int argc, char **argv) {
      if (argc >= 2 && !strcmp(argv[1], "serve")) return cmd_serve(argc - 2, argv + 2);
-     if (argc >= 2 && !strcmp(argv[1], "chat"))  return cmd_chat(argc - 2, argv + 2);
+     if (argc == 2 && !strcmp(argv[1], "chat") && g_tty && isatty(0)) return cmd_home();
+     if (argc >= 2 && !strcmp(argv[1], "chat")) return cmd_chat(argc - 2, argv + 2);
 +    if (argc >= 2 && !strcmp(argv[1], "gateway"))
 +        return cmd_gateway(argc - 2, argv + 2);
-     /* No arguments and a terminal: this is a person, not a script. Chat is
-      * the only thing a person wants by default, and everything it needs is
-      * either remembered or asked for in the panel. */
-@@ -4437,6 +4896,7 @@ int main(int argc, char **argv) {
+     /* Interactive entry points share one workspace. Explicit flags remain
+      * available to scripts without inheriting an implicit sharing role. */
+     if (argc == 1 && g_tty) return cmd_home();
+@@ -6089,6 +6546,7 @@ int main(int argc, char **argv) {
          "  lumabri peer-key                                           print this machine's endpoint identity\n"
          "  lumabri serve --model DIR [--port 7300] [--join TRACKER]   share a model\n"
          "  lumabri chat  [--tracker HOST:7300] [--model NAME]         chat with it\n"

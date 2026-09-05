@@ -32,6 +32,14 @@ function assertRef(contract, component) {
   const ref = contract[component].sourceRef
   if (contract.status === 'edge') assert.equal(ref, 'main', `${contract.id}: ${component} edge ref`)
   else assert.match(ref, shaPattern, `${contract.id}: ${component} must use an exact SHA`)
+  if (contract[component].headRef !== undefined) {
+    assert.notEqual(contract.status, 'edge', `${contract.id}: ${component} edge head is already main`)
+    assert.match(
+      contract[component].headRef,
+      shaPattern,
+      `${contract.id}: ${component} headRef must use an exact SHA`
+    )
+  }
 }
 
 assert.equal(matrix.schemaVersion, 1)
