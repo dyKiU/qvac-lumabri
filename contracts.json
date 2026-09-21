@@ -61,7 +61,6 @@
     {
       "id": "stable-0.1-r2",
       "status": "supported",
-      "primary": true,
       "adapter": "0.1.x",
       "qvac": {
         "sdk": "0.18.1",
@@ -88,6 +87,46 @@
       "colibri": {
         "release": "v1.7.0",
         "sourceRef": "259858f95e49ccd10fd1e300f73894ce3fafe8e3"
+      },
+      "proof": [
+        "unit",
+        "bundle",
+        "gateway",
+        "native-build",
+        "token-identity"
+      ]
+    },
+    {
+      "id": "stable-0.1-r3",
+      "status": "supported",
+      "primary": true,
+      "adapter": "0.1.x",
+      "qvac": {
+        "sdk": "0.19.1",
+        "sdkGitHead": "0bb1acbce3042213d856d9e8d7a9a8934718cffe",
+        "cli": "0.13.1",
+        "cliGitHead": "b36b4cfa564bb4497c064696739b6385db83892d",
+        "sourceRef": "0bb1acbce3042213d856d9e8d7a9a8934718cffe",
+        "delegatedPluginRpc": false
+      },
+      "gatewayProtocol": 1,
+      "nativeCapabilities": {
+        "segmentRuntime": true,
+        "edgeRuntime": false,
+        "glm53Text": false,
+        "glm53Vision": false,
+        "structuredToolSideband": false
+      },
+      "lumabri": {
+        "releaseBase": "v0.8.0",
+        "baseline": "post-v0.8.0",
+        "sourceRef": "bdfa7cc260e6cc2333f0812b6e4c8b960ffc188a",
+        "gatewayPatch": "native/lumabri-gateway-main.patch"
+      },
+      "colibri": {
+        "release": "v1.12.0",
+        "sourceRef": "dcd73832f293750086643e1f0ccd2cd6d067259c",
+        "headRef": "9d5d05de7f4ccf39840224ed295f292ab8aeb598"
       },
       "proof": [
         "unit",

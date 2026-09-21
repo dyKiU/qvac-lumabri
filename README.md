@@ -31,9 +31,9 @@ Build Lumabri with the gateway patch and matching Colibri sources:
 ```sh
 git clone https://github.com/JustVugg/lumabri.git .upstream/lumabri
 git clone https://github.com/JustVugg/colibri.git .upstream/colibri
-git -C .upstream/lumabri checkout d493fb26d370ea9246a11b6b987b13d1bb84133d
-git -C .upstream/colibri checkout 259858f95e49ccd10fd1e300f73894ce3fafe8e3
-scripts/apply-lumabri-gateway.sh .upstream/lumabri
+git -C .upstream/lumabri checkout bdfa7cc260e6cc2333f0812b6e4c8b960ffc188a
+git -C .upstream/colibri checkout dcd73832f293750086643e1f0ccd2cd6d067259c
+scripts/apply-lumabri-gateway.sh .upstream/lumabri native/lumabri-gateway-main.patch
 make -C .upstream/lumabri lumabri colibri_p2p expert_node_glm ENGINE=../colibri/c
 ```
 
@@ -68,6 +68,7 @@ Use `model` plus `tracker` instead of `localDir` for a Lumabri swarm model.
 |---|---|---|---|---|---|---|
 | stable-0.1 | supported | 0.1.x | 0.17.1 / 0.11.0 | v1 | `post-v0.8.0 @ d493fb2` | `v1.4.0 @ b085b48` |
 | stable-0.1-r2 | supported | 0.1.x | 0.18.1 / 0.12.0 | v1 | `post-v0.8.0 @ d493fb2` | `v1.7.0 @ 259858f` |
+| stable-0.1-r3 | supported | 0.1.x | 0.19.1 / 0.13.1 | v1 | `post-v0.8.0 @ bdfa7cc` | `v1.12.0 @ dcd7383` |
 | dev-next | candidate | main | 0.19.1 / 0.13.1 | v1 | `post-v0.8.0 @ bdfa7cc` | `v1.12.0 @ dcd7383` |
 | upstream-head | edge | main | main / main | v1 | `main` | `main` |
 <!-- contracts:end -->
@@ -78,8 +79,8 @@ Node.js is `>=20 <23`; Zod is `>=4.4.3 <5.0.0`.
 
 The adapter streams text and stats, serializes same-model requests, resets KV
 state between requests, and supervises the native process. Hard cancellation
-and status RPC are local-load features: supported QVAC SDKs `0.17.1` and
-`0.18.1` do not delegate custom plugin RPC. Tools, attachments, structured
+and status RPC are local-load features: supported QVAC SDKs `0.17.1`, `0.18.1`,
+and `0.19.1` do not delegate custom plugin RPC. Tools, attachments, structured
 output, and per-request sampling are not supported in `0.1.x`.
 
 ## Multi-node

@@ -177,14 +177,35 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
       - name: Build and pack QVAC SDK
         working-directory: upstream/qvac/packages/sdk
         run: |
-          npm install --ignore-scripts --no-audit --no-fund
-          npm run build
-          npm pack --pack-destination "$RUNNER_TEMP"
+          if node -e "const p = require('./package.json'); process.exit(p.dependencies?.['@qvac/inference'] ? 0 : 1)"; then
+            pushd ../inference
+            bun install
+            bun x tsc --project tsconfig.build.json --noCheck
+            bun run postcompile:aliases
+            bun pm pack --destination "$RUNNER_TEMP"
+            popd
+            bun install
+            bun x tsc --project tsconfig.json --noCheck
+            bun run postcompile:aliases
+            bun pm pack --destination "$RUNNER_TEMP"
+          else
+            npm install --ignore-scripts --no-audit --no-fund
+            npm run build
+            npm pack --pack-destination "$RUNNER_TEMP"
+          fi
       - name: Install source-built SDK
         working-directory: adapter
-        run: npm install --no-save "$RUNNER_TEMP"/qvac-sdk-*.tgz
+        run: |
+          packages=("$RUNNER_TEMP"/qvac-sdk-*.tgz)
+          if compgen -G "$RUNNER_TEMP/qvac-inference-*.tgz" > /dev/null; then
+            packages+=("$RUNNER_TEMP"/qvac-inference-*.tgz)
+          fi
+          npm install --no-save "${packages[@]}"
       - run: npm run bundle && npm run verify:bundle && npm run test:qvac
         working-directory: adapter
