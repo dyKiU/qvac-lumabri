@@ -43,6 +43,24 @@ export type QvacLoadModelOperation = (
   options: QvacLoadModelOptions & { delegate: QvacLoadDelegate }
 ) => Promise<string>
 
+const delegatedProviderUnavailable =
+  'Installed QVAC SDK cannot delegate to a provider'
+
+/**
+ * QVAC 0.19 and later publish a local-only heartbeat (no parameters) and drop
+ * unknown `delegate` fields from loadModel. Calling those defaults would mark
+ * every provider healthy and then load on the local worker. A parameterless
+ * heartbeat is that SDK shape; caller-supplied operations are left unchanged.
+ */
+export function providerOperationsForSdk(sdk: {
+  heartbeat: QvacHeartbeatOperation
+  loadModel: QvacLoadModelOperation
+}): { heartbeat: QvacHeartbeatOperation; loadModel: QvacLoadModelOperation } {
+  if (sdk.heartbeat.length > 0) return sdk
+  const unavailable = (): Promise<never> => Promise.reject(new Error(delegatedProviderUnavailable))
+  return { heartbeat: unavailable, loadModel: unavailable }
+}
+
 export interface QvacProviderPoolOptions {
   providers: readonly QvacProvider[]
   contractId: string

@@ -1,5 +1,6 @@
 import { heartbeat, invokePlugin, loadModel } from '@qvac/sdk'
 import {
+  providerOperationsForSdk,
   QvacProviderPool,
   type QvacHeartbeatOperation,
   type QvacLoadModelOperation,
@@ -39,12 +40,14 @@ export interface LumabriStatusResult {
 }
 
 export function createQvacProviderPool(options: CreateQvacProviderPoolOptions): QvacProviderPool {
-  const loadModelOperation: QvacLoadModelOperation = options.loadModel ??
-    (async (loadOptions) => loadModel(loadOptions as never))
+  const sdkOperations = providerOperationsForSdk({
+    heartbeat,
+    loadModel: async (loadOptions) => loadModel(loadOptions as never)
+  })
   return new QvacProviderPool({
     ...options,
-    heartbeat: options.heartbeat ?? heartbeat,
-    loadModel: loadModelOperation
+    heartbeat: options.heartbeat ?? sdkOperations.heartbeat,
+    loadModel: options.loadModel ?? sdkOperations.loadModel
   })
 }
 
