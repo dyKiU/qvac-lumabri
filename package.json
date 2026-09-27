@@ -74,7 +74,7 @@
     "@qvac/sdk": "0.18.1",
     "@types/node": "20.19.24",
     "typescript": "5.9.3",
-    "zod": "4.4.3"
+    "zod": "4.5.1"
   },
   "overrides": {
     "@fastify/static": "10.1.2"
