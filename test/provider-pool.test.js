@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { QvacProviderPool, QvacProviderPoolError } from '../dist/lib/provider-pool.js'
+import {
+  providerOperationsForSdk,
+  QvacProviderPool,
+  QvacProviderPoolError
+} from '../dist/lib/provider-pool.js'
 
 const CONTRACT = 'stable-0.1'
 const MODEL = 'sha256:model-a'
@@ -283,4 +287,40 @@ test('keeps provider failure metadata bounded to public contract fields', async 
     assert.equal(JSON.stringify(error.attempts).includes(secretMarker), false)
     return true
   })
+})
+
+test('keeps delegated SDK operations and rejects local-only SDK defaults', async () => {
+  const seen = []
+  const delegated = providerOperationsForSdk({
+    heartbeat: async ({ delegate }) => {
+      seen.push(delegate.providerPublicKey)
+    },
+    loadModel: async (options) => `loaded:${options.delegate.providerPublicKey}`
+  })
+  await delegated.heartbeat({ delegate: { providerPublicKey: key('a'), timeout: 100 } })
+  assert.deepEqual(seen, [key('a')])
+  assert.equal(
+    await delegated.loadModel({ delegate: { providerPublicKey: key('a'), healthCheckTimeout: 100, fallbackToLocal: false } }),
+    `loaded:${key('a')}`
+  )
+
+  let loaded = false
+  const localOnly = providerOperationsForSdk({
+    heartbeat: async () => {},
+    loadModel: async () => {
+      loaded = true
+      return 'local-model'
+    }
+  })
+  await assert.rejects(
+    localOnly.heartbeat({ delegate: { providerPublicKey: key('b'), timeout: 100 } }),
+    /cannot delegate to a provider/
+  )
+  await assert.rejects(
+    localOnly.loadModel({
+      delegate: { providerPublicKey: key('b'), healthCheckTimeout: 100, fallbackToLocal: false }
+    }),
+    /cannot delegate to a provider/
+  )
+  assert.equal(loaded, false)
 })

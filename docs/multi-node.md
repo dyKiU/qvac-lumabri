@@ -24,7 +24,9 @@ weights stay on Lumabri peers once the swarm has complete expert coverage.
 
 QVAC SDKs `0.17.1` and `0.18.1` delegate directly to one provider public key.
 They do not discover equivalent model providers or choose between them. The
-adapter adds a small client-side pool for that policy.
+adapter adds a small client-side pool for that policy. QVAC `0.19` and later
+publish a local-only heartbeat, so the pool's default SDK binding reports
+those providers unavailable and does not load the model on the local worker.
 
 ```js
 import { createQvacProviderPool } from '@lumabri/qvac-adapter'

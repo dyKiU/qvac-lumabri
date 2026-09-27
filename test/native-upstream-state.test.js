@@ -6,23 +6,23 @@ import { nativeUpstreamChanges } from '../scripts/check-native-upstreams.mjs'
 const candidate = {
   lumabri: {
     releaseBase: 'v0.8.0',
-    sourceRef: 'ff9275bd4522622ac54957815d07ede1f3c083c8'
+    sourceRef: 'bdfa7cc260e6cc2333f0812b6e4c8b960ffc188a'
   },
   colibri: {
-    release: 'v1.9.0',
-    sourceRef: '184e05221a43b3bbeb3321e3438c067b3a46e202'
+    release: 'v1.12.1',
+    sourceRef: 'ce370e87d7b623d7759b52ec2007d75fc5b0e87e'
   }
 }
 
 const current = {
   lumabri: {
-    head: 'ff9275bd4522622ac54957815d07ede1f3c083c8',
+    head: 'bdfa7cc260e6cc2333f0812b6e4c8b960ffc188a',
     release: 'v0.8.0'
   },
   colibri: {
-    head: '184e05221a43b3bbeb3321e3438c067b3a46e202',
-    release: 'v1.9.0',
-    releaseRef: '184e05221a43b3bbeb3321e3438c067b3a46e202'
+    head: 'ce370e87d7b623d7759b52ec2007d75fc5b0e87e',
+    release: 'v1.12.1',
+    releaseRef: 'ce370e87d7b623d7759b52ec2007d75fc5b0e87e'
   }
 }
 
