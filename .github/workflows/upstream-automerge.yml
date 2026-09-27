@@ -1,0 +1,116 @@
+name: Auto-merge upstream autofix
+
+# Queues squash merge for Cursor upstream-fix PRs after required checks pass.
+# Requires "Allow auto-merge" in repository settings.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [main]
+  workflow_run:
+    workflows: [Verify]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-automerge-${{ github.event.pull_request.number || github.event.workflow_run.id }}
+  cancel-in-progress: true
+
+jobs:
+  queue-merge:
+    if: >
+      (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        !github.event.pull_request.draft) ||
+      (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        startsWith(github.event.workflow_run.head_branch, 'cursor/'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Resolve pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            echo "number=${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          branch="${{ github.event.workflow_run.head_branch }}"
+          number=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" --base main \
+            --state open --json number --jq '.[0].number // empty')
+          if [ -z "$number" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No open PR for branch ${branch}"
+            exit 0
+          fi
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Queue auto-merge when eligible
+        if: steps.pr.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          marker='<!-- upstream-autofix -->'
+          view=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json \
+            body,headRefName,isDraft,autoMergeRequest,files)
+          body=$(echo "$view" | jq -r '.body // ""')
+          head=$(echo "$view" | jq -r '.headRefName')
+          draft=$(echo "$view" | jq -r '.isDraft')
+          queued=$(echo "$view" | jq -r '.autoMergeRequest.enabled // false')
+
+          if [ "$draft" = true ]; then
+            echo "Draft PR; skipping"
+            exit 0
+          fi
+          if [[ "$head" != cursor/* ]]; then
+            echo "Head branch is not a Cursor agent branch; skipping"
+            exit 0
+          fi
+          if ! grep -Fq "$marker" <<< "$body"; then
+            echo "Missing upstream autofix marker; skipping"
+            exit 0
+          fi
+
+          mapfile -t changed < <(echo "$view" | jq -r '.files[].path')
+          allowed=(
+            contracts.json
+            README.md
+            docs/multi-node.md
+            native/lumabri-gateway-main.patch
+            native/lumabri-gateway.patch
+            scripts/check-native-upstreams.mjs
+            scripts/check-contracts.mjs
+            src/client.ts
+            src/lib/provider-pool.ts
+            test/native-upstream-state.test.js
+            test/provider-pool.test.js
+          )
+          for path in "${changed[@]}"; do
+            ok=false
+            for entry in "${allowed[@]}"; do
+              if [ "$path" = "$entry" ]; then
+                ok=true
+                break
+              fi
+            done
+            if [ "$ok" = false ]; then
+              echo "Out-of-scope file for auto-merge: $path" >&2
+              exit 0
+            fi
+          done
+
+          if [ "$queued" = true ]; then
+            echo "Auto-merge already queued for PR #${PR_NUMBER}"
+            exit 0
+          fi
+
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch
+          echo "Queued squash auto-merge for upstream autofix PR #${PR_NUMBER}"

@@ -64,6 +64,8 @@ jobs:
           - Keep README contract markers in sync (npm run docs:contracts).
           - Follow AGENTS.md: minimal scope, run npm run check and npm run check:hygiene before opening a PR.
           - Create a branch named cursor/upstream-compat-29e5 (or cursor/<short-topic>-29e5) off main.
+          - PR title must start with "Refresh upstream compatibility".
+          - PR description must include this exact marker on its own line: <!-- upstream-autofix -->
 
           Recent failure log (tail):
 
