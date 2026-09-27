@@ -51,6 +51,7 @@ jobs:
           FAILED_JOBS: ${{ steps.logs.outputs.failed_jobs }}
         run: |
           set -euo pipefail
+          merge_token=$(openssl rand -hex 32)
           prompt=$(
             cat <<EOF
           The scheduled Upstream compatibility workflow failed on main for ${REPO_URL}.
@@ -65,7 +66,9 @@ jobs:
           - Follow AGENTS.md: minimal scope, run npm run check and npm run check:hygiene before opening a PR.
           - Create a branch named cursor/upstream-compat-29e5 (or cursor/<short-topic>-29e5) off main.
           - PR title must start with "Refresh upstream compatibility".
-          - PR description must include this exact marker on its own line: <!-- upstream-autofix -->
+          - PR description must include these exact markers on their own lines:
+            <!-- upstream-autofix -->
+            <!-- upstream-autofix-token:${merge_token} -->
 
           Recent failure log (tail):
 
@@ -77,6 +80,7 @@ jobs:
             --arg url "$REPO_URL" \
             --arg run_id "${{ github.event.workflow_run.id }}" \
             --arg run_url "$RUN_URL" \
+            --arg merge_token "$merge_token" \
             '{
               name: "Upstream compat autofix",
               prompt: { text: $text },
@@ -85,7 +89,8 @@ jobs:
               metadata: {
                 trigger: "upstream-autofix",
                 workflowRunId: $run_id,
-                workflowRunUrl: $run_url
+                workflowRunUrl: $run_url,
+                mergeToken: $merge_token
               }
             }' > agent-request.json
           response=$(

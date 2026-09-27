@@ -1,7 +1,8 @@
 name: Auto-merge upstream autofix
 
 # Queues squash merge for Cursor upstream-fix PRs after required checks pass.
-# Requires "Allow auto-merge" in repository settings.
+# Requires "Allow auto-merge" in repository settings and secret CURSOR_API_KEY
+# (same key as upstream-autofix) so merges are limited to agents this repo launched.
 
 on:
   pull_request:
@@ -22,12 +23,13 @@ concurrency:
 jobs:
   queue-merge:
     if: >
-      (github.event_name == 'pull_request' &&
+      secrets.CURSOR_API_KEY != '' &&
+      ((github.event_name == 'pull_request' &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         !github.event.pull_request.draft) ||
       (github.event_name == 'workflow_run' &&
         github.event.workflow_run.conclusion == 'success' &&
-        startsWith(github.event.workflow_run.head_branch, 'cursor/'))
+        startsWith(github.event.workflow_run.head_branch, 'cursor/')))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -55,16 +57,18 @@ jobs:
         if: steps.pr.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
         run: |
           set -euo pipefail
           marker='<!-- upstream-autofix -->'
           view=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json \
-            body,headRefName,isDraft,autoMergeRequest,files)
+            body,headRefName,isDraft,autoMergeRequest,files,url)
           body=$(echo "$view" | jq -r '.body // ""')
           head=$(echo "$view" | jq -r '.headRefName')
           draft=$(echo "$view" | jq -r '.isDraft')
           queued=$(echo "$view" | jq -r '.autoMergeRequest.enabled // false')
+          pr_url=$(echo "$view" | jq -r '.url')
 
           if [ "$draft" = true ]; then
             echo "Draft PR; skipping"
@@ -76,6 +80,67 @@ jobs:
           fi
           if ! grep -Fq "$marker" <<< "$body"; then
             echo "Missing upstream autofix marker; skipping"
+            exit 0
+          fi
+          if ! grep -Fq '<!-- CURSOR_AGENT_PR_BODY_BEGIN -->' <<< "$body"; then
+            echo "Missing Cursor agent PR body wrapper; skipping"
+            exit 0
+          fi
+          merge_token=$(
+            grep -Eo '<!-- upstream-autofix-token:[0-9a-f]{64} -->' <<< "$body" \
+              | head -n 1 \
+              | sed 's/<!-- upstream-autofix-token://;s/ -->//'
+          )
+          if [ -z "$merge_token" ]; then
+            echo "Missing upstream autofix merge token; skipping"
+            exit 0
+          fi
+
+          pr_url_encoded=$(jq -nr --arg u "$pr_url" '$u|@uri')
+          agent_list=$(
+            curl --fail-with-body -sS -u "${CURSOR_API_KEY}:" \
+              "https://api.cursor.com/v1/agents?prUrl=${pr_url_encoded}&limit=20"
+          )
+          verified_agent_id=
+          while IFS= read -r agent_id; do
+            [ -n "$agent_id" ] || continue
+            agent_json=$(
+              curl --fail-with-body -sS -u "${CURSOR_API_KEY}:" \
+                "https://api.cursor.com/v1/agents/${agent_id}"
+            )
+            trigger=$(echo "$agent_json" | jq -r '.metadata.trigger // empty')
+            token=$(echo "$agent_json" | jq -r '.metadata.mergeToken // empty')
+            if [ "$trigger" = upstream-autofix ] && [ "$token" = "$merge_token" ]; then
+              verified_agent_id=$agent_id
+              latest_run_id=$(echo "$agent_json" | jq -r '.latestRunId // empty')
+              break
+            fi
+          done < <(echo "$agent_list" | jq -r '.items[]?.id // empty')
+
+          if [ -z "$verified_agent_id" ]; then
+            echo "No upstream-autofix agent from this repo matches PR token; skipping"
+            exit 0
+          fi
+          if ! grep -Fq "cursor.com/agents/${verified_agent_id}" <<< "$body"; then
+            echo "PR body does not reference the verified Cursor agent; skipping"
+            exit 0
+          fi
+          if [ -z "${latest_run_id:-}" ]; then
+            echo "Verified agent has no run id yet; skipping"
+            exit 0
+          fi
+          run_json=$(
+            curl --fail-with-body -sS -u "${CURSOR_API_KEY}:" \
+              "https://api.cursor.com/v1/agents/${verified_agent_id}/runs/${latest_run_id}"
+          )
+          branch_match=$(
+            echo "$run_json" | jq -r --arg branch "$head" --arg pr "$pr_url" '
+              [.git.branches[]?
+                | select(.branch == $branch and (.prUrl == $pr or .prUrl == null))
+              ] | length > 0'
+          )
+          if [ "$branch_match" != true ]; then
+            echo "Cursor agent run is not bound to this PR branch; skipping"
             exit 0
           fi
 
