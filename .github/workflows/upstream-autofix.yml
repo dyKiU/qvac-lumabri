@@ -1,0 +1,102 @@
+name: Upstream autofix
+
+# Launches a Cursor Cloud Agent when the upstream canary fails on main.
+# Add repository secret CURSOR_API_KEY (Cursor Dashboard → API Keys).
+
+on:
+  workflow_run:
+    workflows: [Upstream compatibility]
+    types: [completed]
+
+permissions:
+  actions: read
+
+concurrency:
+  group: upstream-autofix-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  launch-fix-agent:
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      !startsWith(github.event.workflow_run.head_branch, 'cursor/') &&
+      secrets.CURSOR_API_KEY != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Collect failed upstream logs
+        id: logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          failed_jobs=$(
+            gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
+              --jq '[.jobs[] | select(.conclusion == "failure") | .name] | join(", ")'
+          )
+          gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed \
+            | tail -n 250 > failed-log.txt
+          {
+            echo "failed_jobs=$failed_jobs"
+            echo "run_url=${{ github.event.workflow_run.html_url }}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Launch Cursor Cloud Agent
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          REPO_URL: https://github.com/${{ github.repository }}
+          RUN_URL: ${{ steps.logs.outputs.run_url }}
+          FAILED_JOBS: ${{ steps.logs.outputs.failed_jobs }}
+        run: |
+          set -euo pipefail
+          prompt=$(
+            cat <<EOF
+          The scheduled Upstream compatibility workflow failed on main for ${REPO_URL}.
+
+          Failed jobs: ${FAILED_JOBS}
+          Workflow run: ${RUN_URL}
+
+          Fix upstream compatibility for this repository:
+          - Refresh candidate pins in contracts.json when Lumabri, Colibri, or QVAC releases moved.
+          - Rebase native/lumabri-gateway-main.patch if Lumabri main changed.
+          - Keep README contract markers in sync (npm run docs:contracts).
+          - Follow AGENTS.md: minimal scope, run npm run check and npm run check:hygiene before opening a PR.
+          - Create a branch named cursor/upstream-compat-29e5 (or cursor/<short-topic>-29e5) off main.
+
+          Recent failure log (tail):
+
+          $(cat failed-log.txt)
+          EOF
+          )
+          jq -n \
+            --arg text "$prompt" \
+            --arg url "$REPO_URL" \
+            --arg run_id "${{ github.event.workflow_run.id }}" \
+            --arg run_url "$RUN_URL" \
+            '{
+              name: "Upstream compat autofix",
+              prompt: { text: $text },
+              repos: [{ url: $url, startingRef: "main" }],
+              autoCreatePR: true,
+              metadata: {
+                trigger: "upstream-autofix",
+                workflowRunId: $run_id,
+                workflowRunUrl: $run_url
+              }
+            }' > agent-request.json
+          response=$(
+            curl --fail-with-body -sS -u "${CURSOR_API_KEY}:" \
+              -H 'Content-Type: application/json' \
+              -d @agent-request.json \
+              https://api.cursor.com/v1/agents
+          )
+          echo "$response" | jq .
+          agent_id=$(echo "$response" | jq -r '.agent.id // empty')
+          run_id=$(echo "$response" | jq -r '.run.id // empty')
+          if [ -z "$agent_id" ] || [ -z "$run_id" ]; then
+            echo "Cursor API response did not include agent/run ids" >&2
+            exit 1
+          fi
+          echo "Launched agent ${agent_id} (run ${run_id})"
