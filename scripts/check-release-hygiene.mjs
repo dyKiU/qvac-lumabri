@@ -4,6 +4,13 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
+const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
+for (const entry of pkg.files ?? []) {
+  assert(
+    !String(entry).includes('native'),
+    'package.json files must not publish native/ patches (use git clone + docs/native-build.md)'
+  )
+}
 const ignored = new Set([
   '.git',
   'node_modules',
