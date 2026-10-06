@@ -24,20 +24,30 @@ flowchart LR
   E -->|selected expert RPCs only| F[Lumabri compute peers]
 ```
 
+## npm package vs git clone
+
+`npm install @lumabri/qvac-adapter` installs the **plugin and TypeScript
+surface only** (`dist/`, `contracts.json`, docs). **`native/*.patch` is not
+published** — building `lumabri gateway` requires a **git checkout** of this
+repository and the steps in [Native Lumabri build](docs/native-build.md).
+
 ## Quick start
 
-Build Lumabri with the gateway patch and matching Colibri sources:
+Clone this adapter repository (not npm alone), then build native Lumabri/Colibri
+for your contract line (primary supported pins shown; see [`contracts.json`](contracts.json)):
 
 ```sh
+git clone https://github.com/dyKiU/qvac-lumabri.git
+cd qvac-lumabri
 git clone https://github.com/JustVugg/lumabri.git .upstream/lumabri
 git clone https://github.com/JustVugg/colibri.git .upstream/colibri
 git -C .upstream/lumabri checkout d493fb26d370ea9246a11b6b987b13d1bb84133d
 git -C .upstream/colibri checkout 259858f95e49ccd10fd1e300f73894ce3fafe8e3
-scripts/apply-lumabri-gateway.sh .upstream/lumabri
+scripts/apply-lumabri-gateway.sh .upstream/lumabri native/lumabri-gateway.patch
 make -C .upstream/lumabri lumabri colibri_p2p expert_node_glm ENGINE=../colibri/c
 ```
 
-Install and bundle the QVAC worker:
+Install adapter dependencies and bundle the QVAC worker:
 
 ```sh
 npm install
