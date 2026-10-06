@@ -24,20 +24,30 @@ flowchart LR
   E -->|selected expert RPCs only| F[Lumabri compute peers]
 ```
 
+## npm package vs git clone
+
+`npm install @lumabri/qvac-adapter` installs the **plugin and TypeScript
+surface only** (`dist/`, `contracts.json`, docs). **`native/*.patch` is not
+published** — building `lumabri gateway` requires a **git checkout** of this
+repository and the steps in [Native Lumabri build](docs/native-build.md).
+
 ## Quick start
 
-Build Lumabri with the gateway patch and matching Colibri sources:
+Clone this adapter repository (not npm alone), then build native Lumabri/Colibri
+for your contract line (primary supported pins shown; see [`contracts.json`](contracts.json)):
 
 ```sh
+git clone https://github.com/dyKiU/qvac-lumabri.git
+cd qvac-lumabri
 git clone https://github.com/JustVugg/lumabri.git .upstream/lumabri
 git clone https://github.com/JustVugg/colibri.git .upstream/colibri
 git -C .upstream/lumabri checkout d493fb26d370ea9246a11b6b987b13d1bb84133d
 git -C .upstream/colibri checkout 259858f95e49ccd10fd1e300f73894ce3fafe8e3
-scripts/apply-lumabri-gateway.sh .upstream/lumabri
+scripts/apply-lumabri-gateway.sh .upstream/lumabri native/lumabri-gateway.patch
 make -C .upstream/lumabri lumabri colibri_p2p expert_node_glm ENGINE=../colibri/c
 ```
 
-Install and bundle the QVAC worker:
+Install adapter dependencies and bundle the QVAC worker:
 
 ```sh
 npm install
@@ -76,11 +86,33 @@ Use `model` plus `tracker` instead of `localDir` for a Lumabri swarm model.
 gate releases; pinned candidates and upstream heads run as weekly canaries.
 Node.js is `>=20 <23`; Zod is `>=4.4.3 <5.0.0`.
 
-The adapter streams text and stats, serializes same-model requests, resets KV
-state between requests, and supervises the native process. Hard cancellation
-and status RPC are local-load features: supported QVAC SDKs `0.17.1` and
-`0.18.1` do not delegate custom plugin RPC. Tools, attachments, structured
-output, and per-request sampling are not supported in `0.1.x`.
+See [QVAC contract lines](docs/qvac-contract-lines.md) for **supported vs
+candidate** behavior. In short: **`peerDependencies` match supported SDKs only**
+(`0.17.1 || 0.18.1`). The **`dev-next`** row (for example QVAC `0.21.x`) is
+validated in **Upstream compatibility** CI with packed SDK builds — installing
+`@qvac/sdk@latest` from npm does **not** by itself mean you are on the candidate
+line.
+
+## Capabilities in adapter 0.1.x
+
+This release is a **text streaming** bridge to the Lumabri gateway, not a full
+QVAC feature surface. Supported behavior:
+
+- Text completions (streamed or buffered), stats from the gateway, per-model
+  request queue, KV reset between requests, local or SSH gateway transport.
+
+**Not supported** (requests fail with explicit errors from the plugin):
+
+- Tool calling (`tools` on completion requests)
+- Message attachments
+- Non-text `responseFormat` (only `{ type: 'text' }` is accepted)
+- Per-request sampling overrides beyond what the gateway/engine expose
+- **`cancelLumabri()` / `lumabriStatus()` on delegated loads** — supported QVAC
+  SDKs do not delegate custom plugin RPC; those helpers work for **local**
+  loads only (see `contracts.json` `delegatedPluginRpc` per line).
+
+Do not assume other QVAC model features work because the model type is
+`lumabri-moe`.
 
 ## Multi-node
 
