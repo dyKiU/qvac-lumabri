@@ -1,7 +1,15 @@
 {
   "name": "@lumabri/qvac-adapter",
   "version": "0.1.0",
-  "description": "QVAC-to-Lumabri adapter for distributed MoE expert execution over RPC.",
+  "description": "QVAC plugin for Lumabri distributed MoE over a native gateway. npm package is JS-only; Lumabri gateway patches and builds require a git clone (see docs/native-build.md).",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dyKiU/qvac-lumabri.git"
+  },
+  "homepage": "https://github.com/dyKiU/qvac-lumabri#readme",
+  "bugs": {
+    "url": "https://github.com/dyKiU/qvac-lumabri/issues"
+  },
   "type": "module",
   "types": "./dist/client.d.ts",
   "exports": {
