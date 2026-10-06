@@ -1,61 +1,16 @@
-diff --git a/engine_patches/deepseek_v4_p2p.py b/engine_patches/deepseek_v4_p2p.py
-index 84cf713..0eb1f18 100644
---- a/engine_patches/deepseek_v4_p2p.py
-+++ b/engine_patches/deepseek_v4_p2p.py
-@@ -43,8 +43,12 @@ def main():
-         # Decide remotely here instead: on success the routed partial lands in
-         # a buffer, `selected` becomes 0 before a single loader starts, and
-         # site 2b adds the buffer where the local loop would have accumulated.
--        ('    if (!result && selected != topk) result = -1;\n',
--         '    if (!result && selected != topk) result = -1;\n'
-+        ('    if (!result && selected != topk)\n'
-+         '        result = moe_fail("layer %d: routing selected %d experts, wanted %d",\n'
-+         '                          weights->plan.layer, selected, topk);\n',
-+         '    if (!result && selected != topk)\n'
-+         '        result = moe_fail("layer %d: routing selected %d experts, wanted %d",\n'
-+         '                          weights->plan.layer, selected, topk);\n'
-          '#ifdef LUMABRI_P2P\n'
-          '    float *lumi_partial = NULL;\n'
-          '    if (!result && lumi_v4_bridge_on(weights->plan.layer)) {\n'
 diff --git a/engine_patches/make_patches.py b/engine_patches/make_patches.py
-index 121557a..6dbc81f 100755
+index 90da14c..cc9359e 100755
 --- a/engine_patches/make_patches.py
 +++ b/engine_patches/make_patches.py
-@@ -251,24 +251,26 @@ fail:
- # has a SHARED expert after the routed loop, plus a CUDA tier branch behind
- # qt_ready() (a stub returning 0 without COLI_CUDA). So the hook must NOT
- # `continue` — it delegates the K routed experts and lets the shared expert and
--# the row's tail run locally. It lands right after `int shared_done = 0;` and
--# ends in `} else`, so it becomes an `else if` in front of the qt_ready() branch:
--# the CPU path delegates, shared_done stays 0, and the shared expert still adds
--# itself to `out`. Without the macro the added lines vanish and qt_ready() is a
--# plain `if` again.
-+# the row's tail run locally. It lands in the `else` between the batched CPU
-+# path and the CUDA tier, so successful delegation skips both routed-expert
-+# paths while the shared expert still adds itself to `out`. Without the macro
-+# the added branch vanishes and the original `else if (use_qt)` remains.
- # --------------------------------------------------------------------------
- QWEN36 = [
--    hook('#include "qwen36_tier.h"   /* optional transparent Vulkan compute backend for MoE experts */\n',
-+    hook('#include "qwen36_tier.h"   /* optional CUDA VRAM expert tier */\n',
-          INCLUDE),
-     hook("    m->dense_load_s = now_s() - t0;\n", """#ifdef LUMIBRI_P2P
-     lumi_init(c->n_layers, c->n_experts, c->hidden);
-     atexit(lumi_report);
- #endif
- """),
--    hook("        if (use_qt) {\n", """#ifdef LUMIBRI_P2P
-+    hook("""        if (use_xf) {
-+            for (int kk = 0; kk < K; kk++) { xidx[s*K+kk] = idx[kk]; xval[s*K+kk] = val[kk]; }
-+        } else""", """
-+#ifdef LUMIBRI_P2P
-         if (lumi_layer_on(layer) &&   /* shared expert remains local */
+@@ -269,7 +269,7 @@ QWEN36 = [
              lumi_moe_apply(layer, idx, val, K, xs, D, out + (int64_t)s*D)) {
          } else
  #endif
 -""", where="before"),
 +       """),
  ]
+ 
+ ENGINES = {
 diff --git a/gateway_test.sh b/gateway_test.sh
 new file mode 100755
 index 0000000..2371859
@@ -140,7 +95,7 @@ index 0000000..2371859
 +run_case "$T/line" "line: hello world 🦜" "$T/line.out"
 +echo "  ✓ prompt dialect and reset-before-generate"
 diff --git a/lumabri.c b/lumabri.c
-index ee94002..7558da8 100644
+index cf420ca..65df069 100644
 --- a/lumabri.c
 +++ b/lumabri.c
 @@ -3,6 +3,7 @@
@@ -178,9 +133,9 @@ index ee94002..7558da8 100644
 +#endif
 +
  #include "lumabri_proto.h"
- #include "lumabri_families.h"
- #include "lumabri_cluster.h"
-@@ -2527,9 +2536,6 @@ static int engine_wait_ready(Engine *e) {
+ #include "lumabri_run_gate.h"
+ #include "src/runtime/lumabri_session_limits.h"
+@@ -2542,9 +2551,6 @@ static int engine_wait_ready(Engine *e) {
      }
  }
  
@@ -190,7 +145,7 @@ index ee94002..7558da8 100644
  /* Some engines (DeepSeek V4) print a dashboard on stdout between the reply text:
   * whole lines like `EMAP 43 256 <hex>`, `TIERS 0 …`, `HITS …`, `HWINFO …`,
   * `PROF …`. They are diagnostics, not generated tokens, and they used to land
-@@ -2541,15 +2547,29 @@ static int engine_wait_ready(Engine *e) {
+@@ -2556,15 +2562,29 @@ static int engine_wait_ready(Engine *e) {
  typedef struct { int mode; char pfx[8]; int pfxn; } TelFilter;
  enum { TF_LINESTART = 0, TF_MID, TF_DROP };
  
@@ -223,7 +178,7 @@ index ee94002..7558da8 100644
              t->pfxn = 0; continue;
          }
          if (t->pfxn < (int)sizeof t->pfx) t->pfx[t->pfxn++] = c;
-@@ -2565,21 +2585,27 @@ static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
+@@ -2580,21 +2600,27 @@ static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
          }
          if (is_tel) { t->pfxn = 0; t->mode = TF_DROP; }
          else if (!maybe || t->pfxn == (int)sizeof t->pfx) {   /* ruled out: it is text */
@@ -255,7 +210,7 @@ index ee94002..7558da8 100644
      const char *S = FRAME_END;
      size_t SL = strlen(S), cap = 8192, len = 0, shown = 0;
      char *buf = malloc(cap), *hit = NULL;
-@@ -2601,12 +2627,15 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -2616,12 +2642,15 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
          /* hold back SL-1 bytes: a sentinel may straddle two reads */
          size_t safe = hit ? (size_t)(hit - buf) : (len > SL ? len - SL : 0);
          if (safe > shown) {
@@ -273,19 +228,19 @@ index ee94002..7558da8 100644
      size_t after = (size_t)(hit - buf) + SL;
      char rest[256];
      size_t rl = len > after ? len - after : 0;
-@@ -2628,6 +2657,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
-     }
- }
+@@ -2645,6 +2674,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
  
+ /* ---- serve codec client: UI is only a consumer of the shared reader ------ */
+ #include "src/runtime/lumabri_reply_stream.h"
++
 +/* The terminal UI's original behavior, now a thin sink wrapper. */
 +static int stream_until_end(Engine *e, char *statline, size_t scap) {
 +    return stream_until_end_to(e, statline, scap, live_chunk, NULL);
 +}
-+
- /* ---- serve codec (PROTO_SERVE2) client — DeepSeek V4 --------------------- */
- typedef struct { int fd; unsigned char b[16384]; size_t off, len; } SReader;
- 
-@@ -5123,6 +5157,427 @@ static int cmd_chat(int argc, char **argv) {
+ /* A growable capture of the assistant's reply, to feed back as history. */
+ typedef struct { char *p; size_t len, cap; } Cap;
+ static int cap_add(Cap *c, const char *d, size_t n) {
+@@ -5215,6 +5249,427 @@ static int cmd_chat(int argc, char **argv) {
      return chat_failed;
  }
  
@@ -713,7 +668,7 @@ index ee94002..7558da8 100644
  /* ---- key: the operator's identity ---------------------------------------
   * Ed25519 keypair. The secret signs the swarm's ground truth and belongs
   * only on the machine that owns the model — ideally offline, since the
-@@ -6075,6 +6530,8 @@ int main(int argc, char **argv) {
+@@ -6440,6 +6895,8 @@ int main(int argc, char **argv) {
      if (argc >= 2 && !strcmp(argv[1], "serve")) return cmd_serve(argc - 2, argv + 2);
      if (argc == 2 && !strcmp(argv[1], "chat") && g_tty && isatty(0)) return cmd_home();
      if (argc >= 2 && !strcmp(argv[1], "chat")) return cmd_chat(argc - 2, argv + 2);
@@ -722,7 +677,7 @@ index ee94002..7558da8 100644
      /* Interactive entry points share one workspace. Explicit flags remain
       * available to scripts without inheriting an implicit sharing role. */
      if (argc == 1 && g_tty) return cmd_home();
-@@ -6089,6 +6546,7 @@ int main(int argc, char **argv) {
+@@ -6456,6 +6913,7 @@ int main(int argc, char **argv) {
          "  lumabri peer-key                                           print this machine's endpoint identity\n"
          "  lumabri serve --model DIR [--port 7300] [--join TRACKER]   share a model\n"
          "  lumabri chat  [--tracker HOST:7300] [--model NAME]         chat with it\n"
