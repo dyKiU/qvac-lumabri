@@ -95,7 +95,7 @@ index 0000000..2371859
 +run_case "$T/line" "line: hello world 🦜" "$T/line.out"
 +echo "  ✓ prompt dialect and reset-before-generate"
 diff --git a/lumabri.c b/lumabri.c
-index cf420ca..65df069 100644
+index 10ac924..b70a493 100644
 --- a/lumabri.c
 +++ b/lumabri.c
 @@ -3,6 +3,7 @@
@@ -135,7 +135,7 @@ index cf420ca..65df069 100644
  #include "lumabri_proto.h"
  #include "lumabri_run_gate.h"
  #include "src/runtime/lumabri_session_limits.h"
-@@ -2542,9 +2551,6 @@ static int engine_wait_ready(Engine *e) {
+@@ -2545,9 +2554,6 @@ static int engine_wait_ready(Engine *e) {
      }
  }
  
@@ -145,7 +145,7 @@ index cf420ca..65df069 100644
  /* Some engines (DeepSeek V4) print a dashboard on stdout between the reply text:
   * whole lines like `EMAP 43 256 <hex>`, `TIERS 0 …`, `HITS …`, `HWINFO …`,
   * `PROF …`. They are diagnostics, not generated tokens, and they used to land
-@@ -2556,15 +2562,29 @@ static int engine_wait_ready(Engine *e) {
+@@ -2559,15 +2565,29 @@ static int engine_wait_ready(Engine *e) {
  typedef struct { int mode; char pfx[8]; int pfxn; } TelFilter;
  enum { TF_LINESTART = 0, TF_MID, TF_DROP };
  
@@ -178,7 +178,7 @@ index cf420ca..65df069 100644
              t->pfxn = 0; continue;
          }
          if (t->pfxn < (int)sizeof t->pfx) t->pfx[t->pfxn++] = c;
-@@ -2580,21 +2600,27 @@ static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
+@@ -2583,21 +2603,27 @@ static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
          }
          if (is_tel) { t->pfxn = 0; t->mode = TF_DROP; }
          else if (!maybe || t->pfxn == (int)sizeof t->pfx) {   /* ruled out: it is text */
@@ -210,7 +210,7 @@ index cf420ca..65df069 100644
      const char *S = FRAME_END;
      size_t SL = strlen(S), cap = 8192, len = 0, shown = 0;
      char *buf = malloc(cap), *hit = NULL;
-@@ -2616,12 +2642,15 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -2619,12 +2645,15 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
          /* hold back SL-1 bytes: a sentinel may straddle two reads */
          size_t safe = hit ? (size_t)(hit - buf) : (len > SL ? len - SL : 0);
          if (safe > shown) {
@@ -228,7 +228,7 @@ index cf420ca..65df069 100644
      size_t after = (size_t)(hit - buf) + SL;
      char rest[256];
      size_t rl = len > after ? len - after : 0;
-@@ -2645,6 +2674,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -2648,6 +2677,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
  
  /* ---- serve codec client: UI is only a consumer of the shared reader ------ */
  #include "src/runtime/lumabri_reply_stream.h"
@@ -240,7 +240,7 @@ index cf420ca..65df069 100644
  /* A growable capture of the assistant's reply, to feed back as history. */
  typedef struct { char *p; size_t len, cap; } Cap;
  static int cap_add(Cap *c, const char *d, size_t n) {
-@@ -5215,6 +5249,427 @@ static int cmd_chat(int argc, char **argv) {
+@@ -5230,6 +5264,427 @@ static int cmd_chat(int argc, char **argv) {
      return chat_failed;
  }
  
@@ -668,7 +668,7 @@ index cf420ca..65df069 100644
  /* ---- key: the operator's identity ---------------------------------------
   * Ed25519 keypair. The secret signs the swarm's ground truth and belongs
   * only on the machine that owns the model — ideally offline, since the
-@@ -6440,6 +6895,8 @@ int main(int argc, char **argv) {
+@@ -6455,6 +6910,8 @@ int main(int argc, char **argv) {
      if (argc >= 2 && !strcmp(argv[1], "serve")) return cmd_serve(argc - 2, argv + 2);
      if (argc == 2 && !strcmp(argv[1], "chat") && g_tty && isatty(0)) return cmd_home();
      if (argc >= 2 && !strcmp(argv[1], "chat")) return cmd_chat(argc - 2, argv + 2);
@@ -677,7 +677,7 @@ index cf420ca..65df069 100644
      /* Interactive entry points share one workspace. Explicit flags remain
       * available to scripts without inheriting an implicit sharing role. */
      if (argc == 1 && g_tty) return cmd_home();
-@@ -6456,6 +6913,7 @@ int main(int argc, char **argv) {
+@@ -6471,6 +6928,7 @@ int main(int argc, char **argv) {
          "  lumabri peer-key                                           print this machine's endpoint identity\n"
          "  lumabri serve --model DIR [--port 7300] [--join TRACKER]   share a model\n"
          "  lumabri chat  [--tracker HOST:7300] [--model NAME]         chat with it\n"
