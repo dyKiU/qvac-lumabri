@@ -78,7 +78,7 @@ Use `model` plus `tracker` instead of `localDir` for a Lumabri swarm model.
 |---|---|---|---|---|---|---|
 | stable-0.1 | supported | 0.1.x | 0.17.1 / 0.11.0 | v1 | `post-v0.8.0 @ d493fb2` | `v1.4.0 @ b085b48` |
 | stable-0.1-r2 | supported | 0.1.x | 0.18.1 / 0.12.0 | v1 | `post-v0.8.0 @ d493fb2` | `v1.7.0 @ 259858f` |
-| dev-next | candidate | main | 0.21.0 / 0.15.0 | v1 | `post-v0.8.0 @ a53bb8e` | `v1.12.1 @ ce370e8` |
+| dev-next | candidate | main | 0.21.0 / 0.15.0 | v1 | `post-v0.8.0 @ 0c11816` | `v1.12.1 @ ce370e8` |
 | upstream-head | edge | main | main / main | v1 | `main` | `main` |
 <!-- contracts:end -->
 
