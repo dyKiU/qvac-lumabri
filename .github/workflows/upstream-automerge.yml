@@ -23,17 +23,29 @@ concurrency:
 jobs:
   queue-merge:
     if: >
-      secrets.CURSOR_API_KEY != '' &&
-      ((github.event_name == 'pull_request' &&
+      (github.event_name == 'pull_request' &&
         github.event.pull_request.head.repo.full_name == github.repository &&
         !github.event.pull_request.draft) ||
       (github.event_name == 'workflow_run' &&
         github.event.workflow_run.conclusion == 'success' &&
-        startsWith(github.event.workflow_run.head_branch, 'cursor/')))
+        startsWith(github.event.workflow_run.head_branch, 'cursor/'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Require CURSOR_API_KEY
+        id: key
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          if [ -n "$CURSOR_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "CURSOR_API_KEY not set; skipping auto-merge."
+          fi
+
       - name: Resolve pull request
+        if: steps.key.outputs.present == 'true'
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
@@ -54,7 +66,7 @@ jobs:
           echo "number=$number" >> "$GITHUB_OUTPUT"
 
       - name: Queue auto-merge when eligible
-        if: steps.pr.outputs.skip != 'true'
+        if: steps.key.outputs.present == 'true' && steps.pr.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}

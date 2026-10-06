@@ -1,37 +1,119 @@
 name: Upstream autofix
 
 # Launches a Cursor Cloud Agent when the upstream canary fails on main.
-# Add repository secret CURSOR_API_KEY (Cursor Dashboard → API Keys).
+# Repository secret: CURSOR_API_KEY (Cursor Dashboard → API Keys).
+#
+# Triggers:
+# - workflow_run: after "Upstream compatibility" completes with failure on main.
+# - workflow_dispatch: manual test or re-launch (see inputs below).
+#
+# Manual dispatch (Actions → Upstream autofix → Run workflow):
+# - Leave upstream_run_id empty to use the latest failed Upstream compatibility run on main.
+# - Set force_launch=true to call the Cursor API without requiring a failed upstream run
+#   (useful to verify CURSOR_API_KEY; uses a minimal test prompt).
 
 on:
   workflow_run:
     workflows: [Upstream compatibility]
     types: [completed]
+  workflow_dispatch:
+    inputs:
+      upstream_run_id:
+        description: Upstream compatibility run ID (optional; latest failed on main if empty)
+        required: false
+        type: string
+      force_launch:
+        description: Skip upstream failure check (manual API key / launch test only)
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   actions: read
+  contents: read
 
 concurrency:
-  group: upstream-autofix-${{ github.event.workflow_run.id }}
+  group: upstream-autofix-${{ github.event.workflow_run.id || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   launch-fix-agent:
     if: >
-      github.event.workflow_run.conclusion == 'failure' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      !startsWith(github.event.workflow_run.head_branch, 'cursor/') &&
-      secrets.CURSOR_API_KEY != ''
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'failure' &&
+        github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Collect failed upstream logs
-        id: logs
+      - name: Resolve upstream workflow run
+        id: upstream
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
+          if [ "${{ github.event_name }}" = workflow_run ]; then
+            echo "run_id=${{ github.event.workflow_run.id }}" >> "$GITHUB_OUTPUT"
+            echo "run_url=${{ github.event.workflow_run.html_url }}" >> "$GITHUB_OUTPUT"
+            echo "conclusion=${{ github.event.workflow_run.conclusion }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "${{ inputs.force_launch }}" = true ]; then
+            echo "run_id=" >> "$GITHUB_OUTPUT"
+            echo "run_url=(manual force_launch — no upstream run)" >> "$GITHUB_OUTPUT"
+            echo "conclusion=skipped" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          run_id="${{ inputs.upstream_run_id }}"
+          if [ -z "$run_id" ]; then
+            run_id=$(gh run list --repo "$GITHUB_REPOSITORY" \
+              --workflow upstream.yml --branch main --limit 30 \
+              --json databaseId,conclusion \
+              --jq '[.[] | select(.conclusion == "failure")][0].databaseId // empty')
+          fi
+          if [ -z "$run_id" ]; then
+            echo "::error::No failed Upstream compatibility run found on main. Pass upstream_run_id or set force_launch=true."
+            exit 1
+          fi
+          run_url=$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json url --jq .url)
+          conclusion=$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json conclusion --jq .conclusion)
+          if [ "$conclusion" != failure ]; then
+            echo "::error::Run ${run_id} conclusion is ${conclusion}, not failure. Set force_launch=true to override."
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "run_url=$run_url" >> "$GITHUB_OUTPUT"
+          echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
+
+      - name: Require CURSOR_API_KEY
+        id: key
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          if [ -n "$CURSOR_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "present=false" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            echo "::error::CURSOR_API_KEY is not configured on this repository."
+            exit 1
+          fi
+          echo "CURSOR_API_KEY not set; skipping autofix agent launch."
+
+      - name: Collect failed upstream logs
+        id: logs
+        if: steps.key.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.upstream.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$RUN_ID" ]; then
+            echo "failed_jobs=(manual test)" >> "$GITHUB_OUTPUT"
+            echo "Manual force_launch: no upstream log collection."
+            exit 0
+          fi
           failed_jobs=$(
             gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
               --jq '[.jobs[] | select(.conclusion == "failure") | .name] | join(", ")'
@@ -40,20 +122,48 @@ jobs:
             | tail -n 250 > failed-log.txt
           {
             echo "failed_jobs=$failed_jobs"
-            echo "run_url=${{ github.event.workflow_run.html_url }}"
+            echo "run_url=${{ steps.upstream.outputs.run_url }}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Launch Cursor Cloud Agent
+        if: steps.key.outputs.present == 'true'
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           REPO_URL: https://github.com/${{ github.repository }}
-          RUN_URL: ${{ steps.logs.outputs.run_url }}
+          RUN_URL: ${{ steps.logs.outputs.run_url || steps.upstream.outputs.run_url }}
           FAILED_JOBS: ${{ steps.logs.outputs.failed_jobs }}
+          UPSTREAM_RUN_ID: ${{ steps.upstream.outputs.run_id }}
+          FORCE_LAUNCH: ${{ inputs.force_launch }}
         run: |
           set -euo pipefail
           merge_token=$(openssl rand -hex 32)
-          prompt=$(
-            cat <<EOF
+          if [ "$FORCE_LAUNCH" = true ] && [ -z "$UPSTREAM_RUN_ID" ]; then
+            prompt=$(
+              cat <<EOF
+          Manual Upstream autofix workflow_dispatch test for ${REPO_URL}.
+
+          This is a connectivity test only. Do not open a pull request.
+          Reply with a single line: upstream-autofix manual dispatch ok
+
+          EOF
+            )
+            jq -n \
+              --arg text "$prompt" \
+              --arg url "$REPO_URL" \
+              --arg merge_token "$merge_token" \
+              '{
+                name: "Upstream autofix manual test",
+                prompt: { text: $text },
+                repos: [{ url: $url, startingRef: "main" }],
+                autoCreatePR: false,
+                metadata: {
+                  trigger: "upstream-autofix-manual",
+                  mergeToken: $merge_token
+                }
+              }' > agent-request.json
+          else
+            prompt=$(
+              cat <<EOF
           The scheduled Upstream compatibility workflow failed on main for ${REPO_URL}.
 
           Failed jobs: ${FAILED_JOBS}
@@ -74,25 +184,26 @@ jobs:
 
           $(cat failed-log.txt)
           EOF
-          )
-          jq -n \
-            --arg text "$prompt" \
-            --arg url "$REPO_URL" \
-            --arg run_id "${{ github.event.workflow_run.id }}" \
-            --arg run_url "$RUN_URL" \
-            --arg merge_token "$merge_token" \
-            '{
-              name: "Upstream compat autofix",
-              prompt: { text: $text },
-              repos: [{ url: $url, startingRef: "main" }],
-              autoCreatePR: true,
-              metadata: {
-                trigger: "upstream-autofix",
-                workflowRunId: $run_id,
-                workflowRunUrl: $run_url,
-                mergeToken: $merge_token
-              }
-            }' > agent-request.json
+            )
+            jq -n \
+              --arg text "$prompt" \
+              --arg url "$REPO_URL" \
+              --arg run_id "$UPSTREAM_RUN_ID" \
+              --arg run_url "$RUN_URL" \
+              --arg merge_token "$merge_token" \
+              '{
+                name: "Upstream compat autofix",
+                prompt: { text: $text },
+                repos: [{ url: $url, startingRef: "main" }],
+                autoCreatePR: true,
+                metadata: {
+                  trigger: "upstream-autofix",
+                  workflowRunId: $run_id,
+                  workflowRunUrl: $run_url,
+                  mergeToken: $merge_token
+                }
+              }' > agent-request.json
+          fi
           response=$(
             curl --fail-with-body -sS -u "${CURSOR_API_KEY}:" \
               -H 'Content-Type: application/json' \
