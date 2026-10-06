@@ -25,3 +25,21 @@
 - Add or update focused tests for behavior changes.
 - Run the relevant JavaScript and native checks before committing.
 - Run `npm run check:hygiene` before publishing.
+
+## Lumabri gateway patch rebases
+
+When Lumabri `main` moves and `native/lumabri-gateway-main.patch` fails to apply:
+
+- Follow [docs/lumabri-gateway-patch.md](docs/lumabri-gateway-patch.md).
+- Update `dev-next` Lumabri `sourceRef` in `contracts.json` and run
+  `npm run docs:contracts`, `check:native-upstreams`, and `check:freshness`.
+- Keep supported-line `native/lumabri-gateway.patch` unchanged unless promoting
+  pins for a release.
+
+## Upstream autofix workflows
+
+- Do not change `CURSOR_API_KEY` values or billing settings in the repo.
+- To verify workflows without a failed canary: use **workflow_dispatch** on
+  **Upstream autofix** with `force_launch` (see workflow header comments).
+- Auto-merge is gated on Cursor API agent metadata; see
+  `.github/workflows/upstream-automerge.yml`.

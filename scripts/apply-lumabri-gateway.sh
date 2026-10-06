@@ -35,7 +35,20 @@ if grep -q 'cmd_gateway' "$lumabri_dir/lumabri.c"; then
   exit 0
 fi
 
-git -C "$lumabri_dir" apply --check "$patch_file"
+lumabri_head=$(git -C "$lumabri_dir" rev-parse HEAD 2>/dev/null || echo unknown)
+apply_err=$(mktemp)
+if ! git -C "$lumabri_dir" apply --check "$patch_file" 2>"$apply_err"; then
+  echo "Lumabri gateway patch does not apply at ${lumabri_head}:" >&2
+  sed 's/^/  /' "$apply_err" >&2
+  rm -f "$apply_err"
+  echo >&2
+  echo "Likely Lumabri main moved ahead of the patch base. Rebase the overlay:" >&2
+  echo "  docs/lumabri-gateway-patch.md" >&2
+  echo "Then refresh dev-next lumabri.sourceRef in contracts.json and run:" >&2
+  echo "  npm run check:native-upstreams && npm run docs:contracts" >&2
+  exit 1
+fi
+rm -f "$apply_err"
 git -C "$lumabri_dir" apply "$patch_file"
 chmod +x "$lumabri_dir/gateway_test.sh"
 echo "Applied Lumabri gateway patch"

@@ -10,7 +10,12 @@ name: Upstream autofix
 # Manual dispatch (Actions → Upstream autofix → Run workflow):
 # - Leave upstream_run_id empty to use the latest failed Upstream compatibility run on main.
 # - Set force_launch=true to call the Cursor API without requiring a failed upstream run
-#   (useful to verify CURSOR_API_KEY; uses a minimal test prompt).
+#   (useful to verify CURSOR_API_KEY; uses a minimal test prompt, autoCreatePR: false).
+#
+# End-to-end path after a real upstream failure (no extra agent launches required to read):
+#   Upstream compatibility (fail on main) → workflow_run → this workflow → agent PR
+#   → Verify (pass) → Auto-merge upstream autofix (CURSOR_API_KEY + token metadata).
+# See docs/lumabri-gateway-patch.md § Autofix automation.
 
 on:
   workflow_run:
