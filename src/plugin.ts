@@ -1,6 +1,6 @@
 import { spawn } from 'bare-subprocess'
 import { z } from 'zod'
-import { defineHandler, definePlugin } from '@qvac/sdk'
+import { defineHandler, definePlugin, type QvacPlugin } from '@qvac/sdk'
 import {
   GatewayCancelledError,
   GatewayClient,
@@ -160,7 +160,7 @@ class LumabriModel {
   }
 }
 
-const lumabriPlugin = definePlugin({
+const lumabriPlugin: QvacPlugin = definePlugin({
   modelType: 'lumabri-moe',
   displayName: 'Lumabri distributed MoE',
   addonPackage: '@lumabri/qvac-adapter',
