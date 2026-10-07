@@ -120,7 +120,7 @@
       "lumabri": {
         "releaseBase": "v0.8.0",
         "baseline": "post-v0.8.0",
-        "sourceRef": "0c1181615ecc489b0afdd6b9c7bf2d6eab803662",
+        "sourceRef": "1e378a1306fe2450cbf873c7df3a64bf52ad634d",
         "gatewayPatch": "native/lumabri-gateway-main.patch"
       },
       "colibri": {
