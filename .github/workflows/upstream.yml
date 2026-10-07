@@ -34,7 +34,8 @@ jobs:
       - id: matrix
         shell: bash
         run: |
-          echo "canaries=$(node scripts/list-contracts.mjs candidate edge)" >> "$GITHUB_OUTPUT"
+          canaries=$(node --import tsx scripts/list-contracts.mts candidate edge)
+          echo "canaries=$canaries" >> "$GITHUB_OUTPUT"
           echo "numpy=$(node -p "require('./contracts.json').runtime.numpy")" >> "$GITHUB_OUTPUT"
 
   native-upstream-state:
@@ -45,6 +46,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+          cache: npm
+      - run: npm ci
       - run: npm run check:native-upstreams
         env:
           GITHUB_TOKEN: ${{ github.token }}

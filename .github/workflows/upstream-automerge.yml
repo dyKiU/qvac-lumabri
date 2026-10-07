@@ -163,12 +163,12 @@ jobs:
             docs/multi-node.md
             native/lumabri-gateway-main.patch
             native/lumabri-gateway.patch
-            scripts/check-native-upstreams.mjs
-            scripts/check-contracts.mjs
+            scripts/check-native-upstreams.mts
+            scripts/check-contracts.mts
             src/client.ts
             src/lib/provider-pool.ts
-            test/native-upstream-state.test.js
-            test/provider-pool.test.js
+            test/native-upstream-state.test.ts
+            test/provider-pool.test.ts
           )
           for path in "${changed[@]}"; do
             ok=false

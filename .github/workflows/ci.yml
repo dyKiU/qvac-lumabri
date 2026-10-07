@@ -32,7 +32,8 @@ jobs:
       - id: matrix
         shell: bash
         run: |
-          echo "supported=$(node scripts/list-contracts.mjs supported)" >> "$GITHUB_OUTPUT"
+          supported=$(node --import tsx scripts/list-contracts.mts supported)
+          echo "supported=$supported" >> "$GITHUB_OUTPUT"
           echo "node=$(node -p "JSON.stringify(require('./contracts.json').runtime.node.tested)")" >> "$GITHUB_OUTPUT"
           echo "numpy=$(node -p "require('./contracts.json').runtime.numpy")" >> "$GITHUB_OUTPUT"
 
