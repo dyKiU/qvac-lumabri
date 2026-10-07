@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 
+interface BundleManifest {
+  version: number
+  addons: string[]
+  bundleId: string
+}
+
 const entry = await readFile(new URL('../qvac/worker.entry.mjs', import.meta.url), 'utf8')
-const manifest = JSON.parse(
+const manifest: BundleManifest = JSON.parse(
   await readFile(new URL('../qvac/addons.manifest.json', import.meta.url), 'utf8')
 )
 

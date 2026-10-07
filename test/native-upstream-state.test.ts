@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { nativeUpstreamChanges } from '../scripts/check-native-upstreams.mjs'
+import { nativeUpstreamChanges } from '../scripts/check-native-upstreams.mts'
 
 const candidate = {
   lumabri: {
@@ -17,7 +17,8 @@ const candidate = {
 const current = {
   lumabri: {
     head: 'bdfa7cc260e6cc2333f0812b6e4c8b960ffc188a',
-    release: 'v0.8.0'
+    release: 'v0.8.0',
+    releaseRef: 'bdfa7cc260e6cc2333f0812b6e4c8b960ffc188a'
   },
   colibri: {
     head: 'ce370e87d7b623d7759b52ec2007d75fc5b0e87e',

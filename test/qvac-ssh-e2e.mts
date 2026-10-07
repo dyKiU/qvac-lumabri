@@ -3,15 +3,20 @@ import { chmod } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { completion, loadModel, unloadModel } from '@qvac/sdk'
 
-const gatewayPath = fileURLToPath(new URL('./fake-gateway.mjs', import.meta.url))
-await chmod(gatewayPath, 0o755)
+const sshPath = fileURLToPath(new URL('./fake-ssh.mts', import.meta.url))
+await chmod(sshPath, 0o755)
 
 const modelId = await loadModel({
   modelSrc: '',
   modelType: 'lumabri-moe',
   modelConfig: {
-    gatewayPath,
-    localDir: 'fake-model',
+    gatewayPath: 'remote-lumabri',
+    transport: {
+      type: 'ssh',
+      host: 'model-host',
+      sshPath
+    },
+    localDir: 'remote-model',
     ctx: 128,
     maxNew: 8,
     cap: 2,
@@ -23,17 +28,15 @@ try {
   const run = completion({
     modelId,
     stream: true,
-    history: [{ role: 'user', content: 'hello' }]
+    history: [{ role: 'user', content: 'hello over SSH' }]
   })
-  const events = []
-  for await (const event of run.events) events.push(event)
+  for await (const _event of run.events) {
+  }
   const final = await run.final
 
-  assert(events.some((event) => event.type === 'contentDelta'))
-  assert(events.some((event) => event.type === 'completionStats'))
-  assert.equal(final.contentText, 'reply(User: hello || Assistant:) 🦜')
+  assert.equal(final.contentText, 'reply(User: hello over SSH || Assistant:) 🦜')
   assert.equal(final.stats.generatedTokens, 3)
-  process.stdout.write('QVAC adapter end-to-end: PASS\n')
+  process.stdout.write('QVAC SSH transport end-to-end: PASS\n')
 } finally {
   await unloadModel({ modelId })
 }

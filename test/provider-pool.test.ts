@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import type { QvacProviderDescriptor, QvacLoadModelOptions, QvacHealthCheckOptions } from '@qvac/sdk'
 import {
   providerOperationsForSdk,
   QvacProviderPool,
@@ -8,9 +9,9 @@ import {
 
 const CONTRACT = 'stable-0.1'
 const MODEL = 'sha256:model-a'
-const key = (digit) => digit.repeat(64)
+const key = (digit: string): string => digit.repeat(64)
 
-function provider(digit, overrides = {}) {
+function provider(digit: string, overrides: Partial<QvacProviderDescriptor> = {}): QvacProviderDescriptor {
   return {
     providerPublicKey: key(digit),
     contractId: CONTRACT,
@@ -20,7 +21,7 @@ function provider(digit, overrides = {}) {
 }
 
 test('returns only healthy providers matching the required contract and model', async () => {
-  const checked = []
+  const checked: string[] = []
   const pool = new QvacProviderPool({
     providers: [
       provider('1'),
@@ -44,8 +45,8 @@ test('returns only healthy providers matching the required contract and model', 
 })
 
 test('retries delegated load on the next healthy provider and records the pin', async () => {
-  const attempts = []
-  const loadOptions = {
+  const attempts: QvacLoadModelOptions[] = []
+  const loadOptions: Omit<QvacLoadModelOptions, 'delegate'> = {
     modelSrc: '',
     modelType: 'lumabri-moe',
     modelConfig: { model: 'model-a', tracker: 'tracker.example:7300' }
@@ -69,7 +70,7 @@ test('retries delegated load on the next healthy provider and records the pin', 
 
   assert.equal(loaded.modelId, 'delegated-model-a')
   assert.equal(loaded.provider.providerPublicKey, key('b'))
-  assert.equal(pool.providerForModel('delegated-model-a').providerPublicKey, key('b'))
+  assert.equal(pool.providerForModel('delegated-model-a')!.providerPublicKey, key('b'))
   assert.deepEqual(attempts.map((entry) => entry.delegate), [
     {
       providerPublicKey: key('a'),
@@ -100,7 +101,7 @@ test('reports every failed provider without silently falling back locally', asyn
 
   await assert.rejects(
     pool.loadModel({ modelSrc: '', modelType: 'lumabri-moe', modelConfig: {} }),
-    (error) => {
+    (error: unknown) => {
       assert(error instanceof QvacProviderPoolError)
       assert.equal(error.attempts.length, 2)
       assert.deepEqual(error.attempts.map((attempt) => attempt.phase), [
@@ -143,7 +144,7 @@ test('rejects a caller-supplied delegate because the pool owns provider selectio
       modelType: 'lumabri-moe',
       modelConfig: {},
       delegate: { providerPublicKey: key('f') }
-    }),
+    } as QvacLoadModelOptions),
     /delegate is managed by QvacProviderPool/
   )
 })
@@ -168,21 +169,21 @@ test('rejects invalid and case-insensitive duplicate provider public keys', () =
 
 test('preserves provider priority when concurrent heartbeats resolve out of order', async () => {
   const gates = new Map([key('1'), key('2')].map((publicKey) => {
-    let release
-    const promise = new Promise((resolve) => { release = resolve })
+    let release!: () => void
+    const promise = new Promise<void>((resolve) => { release = resolve })
     return [publicKey, { promise, release }]
   }))
   const pool = new QvacProviderPool({
     providers: [provider('1'), provider('2')],
     contractId: CONTRACT,
     modelFingerprint: MODEL,
-    heartbeat: ({ delegate }) => gates.get(delegate.providerPublicKey).promise,
+    heartbeat: ({ delegate }) => gates.get(delegate.providerPublicKey)!.promise,
     loadModel: async () => 'unused'
   })
 
   const pending = pool.availableProviders()
-  gates.get(key('2')).release()
-  gates.get(key('1')).release()
+  gates.get(key('2'))!.release()
+  gates.get(key('1'))!.release()
 
   const available = await pending
   assert.deepEqual(available.map((entry) => entry.providerPublicKey), [key('1'), key('2')])
@@ -203,7 +204,7 @@ test('reports heartbeat failures without attempting model loads', async () => {
     }
   })
 
-  await assert.rejects(pool.loadModel({ modelSrc: '', modelConfig: {} }), (error) => {
+  await assert.rejects(pool.loadModel({ modelSrc: '', modelConfig: {} }), (error: unknown) => {
     assert(error instanceof QvacProviderPoolError)
     assert.deepEqual(error.attempts.map((attempt) => attempt.phase), [
       'heartbeat',
@@ -215,7 +216,7 @@ test('reports heartbeat failures without attempting model loads', async () => {
 })
 
 test('propagates explicit connection options to the selected provider', async () => {
-  let delegated
+  let delegated: QvacHealthCheckOptions | undefined
   const pool = new QvacProviderPool({
     providers: [provider('a')],
     contractId: CONTRACT,
@@ -255,11 +256,11 @@ test('updates and forgets the observed provider when a model id is reused', asyn
   })
 
   await pool.loadModel({ modelSrc: '', modelConfig: {} })
-  assert.equal(pool.providerForModel('shared-model-id').providerPublicKey, key('a'))
+  assert.equal(pool.providerForModel('shared-model-id')!.providerPublicKey, key('a'))
 
   activeProvider = key('b')
   await pool.loadModel({ modelSrc: '', modelConfig: {} })
-  assert.equal(pool.providerForModel('shared-model-id').providerPublicKey, key('b'))
+  assert.equal(pool.providerForModel('shared-model-id')!.providerPublicKey, key('b'))
   assert.equal(pool.forgetModel('shared-model-id'), true)
   assert.equal(pool.providerForModel('shared-model-id'), null)
   assert.equal(pool.forgetModel('shared-model-id'), false)
@@ -268,7 +269,7 @@ test('updates and forgets the observed provider when a model id is reused', asyn
 test('keeps provider failure metadata bounded to public contract fields', async () => {
   const secretMarker = 'private-provider-configuration'
   const pool = new QvacProviderPool({
-    providers: [provider('a', { operatorSecret: secretMarker, label: 'provider-a' })],
+    providers: [provider('a', { operatorSecret: secretMarker, label: 'provider-a' } as QvacProviderDescriptor)],
     contractId: CONTRACT,
     modelFingerprint: MODEL,
     heartbeat: async () => {
@@ -277,9 +278,9 @@ test('keeps provider failure metadata bounded to public contract fields', async 
     loadModel: async () => 'unused'
   })
 
-  await assert.rejects(pool.loadModel({ modelSrc: '', modelConfig: {} }), (error) => {
+  await assert.rejects(pool.loadModel({ modelSrc: '', modelConfig: {} }), (error: unknown) => {
     assert(error instanceof QvacProviderPoolError)
-    assert.deepEqual(Object.keys(error.attempts[0].provider).sort(), [
+    assert.deepEqual(Object.keys(error.attempts[0]!.provider).sort(), [
       'contractId',
       'modelFingerprint',
       'providerPublicKey'
@@ -290,7 +291,7 @@ test('keeps provider failure metadata bounded to public contract fields', async 
 })
 
 test('keeps delegated SDK operations and rejects local-only SDK defaults', async () => {
-  const seen = []
+  const seen: string[] = []
   const delegated = providerOperationsForSdk({
     heartbeat: async ({ delegate }) => {
       seen.push(delegate.providerPublicKey)

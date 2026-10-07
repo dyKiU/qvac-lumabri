@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn as nodeSpawn } from 'node:child_process'
+import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
@@ -10,13 +10,34 @@ import {
   Utf8ChunkDecoder
 } from '../dist/lib/gateway-client.js'
 
-const fakeGateway = fileURLToPath(new URL('./fake-gateway.mjs', import.meta.url))
+const fakeGateway = fileURLToPath(new URL('./fake-gateway.mts', import.meta.url))
 
-function spawnFake(_command, args, options) {
-  return nodeSpawn(process.execPath, [fakeGateway, ...args], options)
+type SpawnFn = (command: string, args: string[], options: { stdio: ('pipe' | 'inherit')[] }) => ChildProcess
+
+function spawnFake(_command: string, args: string[], options: { stdio: ('pipe' | 'inherit')[] }): ChildProcess {
+  return nodeSpawn(process.execPath, ['--import', 'tsx', fakeGateway, ...args], options)
 }
 
-function client(overrides = {}, dependencies = { spawn: spawnFake }) {
+interface GatewayClientOverrides {
+  gatewayPath?: string
+  localDir?: string
+  tracker?: string
+  ctx?: number
+  maxNew?: number
+  cap?: number
+  startupTimeoutMs?: number
+  transport?: {
+    type: 'ssh'
+    host: string
+    sshPath?: string
+    connectTimeoutSeconds?: number
+    identityFile?: string
+    knownHostsFile?: string
+  }
+  enginePath?: string
+}
+
+function client(overrides: GatewayClientOverrides = {}, dependencies: { spawn: SpawnFn } = { spawn: spawnFake }): GatewayClient {
   return new GatewayClient({
     gatewayPath: 'ignored-lumabri',
     localDir: 'fake-model',
@@ -29,8 +50,16 @@ function client(overrides = {}, dependencies = { spawn: spawnFake }) {
   }, dependencies)
 }
 
-function controlledChild(onInput = () => {}) {
-  const child = new EventEmitter()
+interface ControlledChild extends EventEmitter {
+  stdout: PassThrough
+  stderr: PassThrough
+  stdin: Writable
+  signals: string[]
+  kill: (signal: string) => boolean
+}
+
+function controlledChild(onInput: (chunk: string, child: ControlledChild) => void = () => {}): ControlledChild {
+  const child = new EventEmitter() as ControlledChild
   child.stdout = new PassThrough()
   child.stderr = new PassThrough()
   child.signals = []
@@ -40,11 +69,11 @@ function controlledChild(onInput = () => {}) {
         onInput(String(chunk), child)
         callback()
       } catch (error) {
-        callback(error)
+        callback(error as Error)
       }
     }
   })
-  child.kill = (signal) => {
+  child.kill = (signal: string) => {
     child.signals.push(signal)
     queueMicrotask(() => child.emit('close', null, signal))
     return true
@@ -52,20 +81,20 @@ function controlledChild(onInput = () => {}) {
   return child
 }
 
-function writeFragmented(stream, value) {
+function writeFragmented(stream: PassThrough, value: string): void {
   const bytes = Buffer.from(value)
   const widths = [1, 3, 2, 5, 4]
   let offset = 0
   let index = 0
   while (offset < bytes.length) {
-    const next = Math.min(bytes.length, offset + widths[index++ % widths.length])
+    const next = Math.min(bytes.length, offset + widths[index++ % widths.length]!)
     stream.write(bytes.subarray(offset, next))
     offset = next
   }
 }
 
-async function collect(run) {
-  const chunks = []
+async function collect(run: AsyncGenerator<Uint8Array, { generatedTokens?: number; tokensPerSecond?: number }>) {
+  const chunks: Uint8Array[] = []
   let result = await run.next()
   while (!result.done) {
     chunks.push(result.value)
@@ -125,7 +154,7 @@ test('same-model completions queue in FIFO order', async (t) => {
 })
 
 test('preserves subprocess arguments without invoking a shell', async (t) => {
-  const captured = {}
+  const captured: { command?: string; args?: string[]; options?: { stdio: ('pipe' | 'inherit')[] } } = {}
   const child = controlledChild()
   const gateway = client({
     gatewayPath: 'lumabri binary',
@@ -133,12 +162,12 @@ test('preserves subprocess arguments without invoking a shell', async (t) => {
     tracker: 'tracker.example:7300',
     enginePath: '/engines/quoted "engine"'
   }, {
-    spawn(command, args, options) {
+    spawn(command: string, args: string[], options: { stdio: ('pipe' | 'inherit')[] }) {
       Object.assign(captured, { command, args, options })
       queueMicrotask(() => child.stdout.write(
         '{"v":1,"type":"ready","protocol":"framed","model":"fake"}\n'
       ))
-      return child
+      return child as unknown as ChildProcess
     }
   })
   t.after(() => gateway.stop())
@@ -165,7 +194,7 @@ test('preserves subprocess arguments without invoking a shell', async (t) => {
 })
 
 test('uses strict SSH options and quotes every remote gateway argument', async (t) => {
-  const captured = {}
+  const captured: { command?: string; args?: string[]; options?: { stdio: ('pipe' | 'inherit')[] } } = {}
   const child = controlledChild()
   const gateway = client({
     gatewayPath: "bin/Lumabri's bin/lumabri",
@@ -179,12 +208,12 @@ test('uses strict SSH options and quotes every remote gateway argument', async (
       knownHostsFile: 'config/known hosts'
     }
   }, {
-    spawn(command, args, options) {
+    spawn(command: string, args: string[], options: { stdio: ('pipe' | 'inherit')[] }) {
       Object.assign(captured, { command, args, options })
       queueMicrotask(() => child.stdout.write(
         '{"v":1,"type":"ready","protocol":"framed","model":"remote"}\n'
       ))
-      return child
+      return child as unknown as ChildProcess
     }
   })
   t.after(() => gateway.stop())
@@ -192,7 +221,7 @@ test('uses strict SSH options and quotes every remote gateway argument', async (
   await gateway.start()
 
   assert.equal(captured.command, 'bin/ssh')
-  assert.deepEqual(captured.args.slice(0, -2), [
+  assert.deepEqual(captured.args!.slice(0, -2), [
     '-T',
     '-o', 'BatchMode=yes',
     '-o', 'ClearAllForwardings=yes',
@@ -206,8 +235,8 @@ test('uses strict SSH options and quotes every remote gateway argument', async (
     '-i', 'keys/provider identity',
     '--'
   ])
-  assert.equal(captured.args.at(-2), 'model-host')
-  assert.equal(captured.args.at(-1), [
+  assert.equal(captured.args!.at(-2), 'model-host')
+  assert.equal(captured.args!.at(-1), [
     "exec 'bin/Lumabri'\\''s bin/lumabri'",
     "'gateway'",
     "'--local'",
@@ -234,7 +263,7 @@ test('rejects an SSH destination that could be parsed as an option', async () =>
   }, {
     spawn() {
       spawned = true
-      return controlledChild()
+      return controlledChild() as unknown as ChildProcess
     }
   })
 
@@ -244,7 +273,7 @@ test('rejects an SSH destination that could be parsed as an option', async () =>
 
 test('parses NDJSON records fragmented across arbitrary byte boundaries', async (t) => {
   const child = controlledChild((line, activeChild) => {
-    const request = JSON.parse(line)
+    const request = JSON.parse(line) as { id: string; op: string; prompt: string }
     const reply = Buffer.from('fragmented 🦜 output')
     const split = reply.length - 2
     const records = [
@@ -260,7 +289,7 @@ test('parses NDJSON records fragmented across arbitrary byte boundaries', async 
         child.stdout,
         '{"v":1,"type":"ready","protocol":"framed","model":"fake 🦜"}\n'
       ))
-      return child
+      return child as unknown as ChildProcess
     }
   })
   t.after(() => gateway.stop())
@@ -275,7 +304,7 @@ test('parses NDJSON records fragmented across arbitrary byte boundaries', async 
 
 test('kills a gateway that does not become ready before the startup timeout', async () => {
   const child = controlledChild()
-  const gateway = client({ startupTimeoutMs: 20 }, { spawn: () => child })
+  const gateway = client({ startupTimeoutMs: 20 }, { spawn: () => child as unknown as ChildProcess })
 
   await assert.rejects(gateway.start(), /was not ready within 20ms/)
   await new Promise((resolve) => setImmediate(resolve))
@@ -292,7 +321,7 @@ test('surfaces a host-key-style subprocess failure during startup', async () => 
         child.stderr.write('Host key verification failed.\n')
         child.emit('close', 255, null)
       })
-      return child
+      return child as unknown as ChildProcess
     }
   })
 

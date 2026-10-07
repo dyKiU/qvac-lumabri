@@ -1,52 +1,104 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 
-const matrix = JSON.parse(await readFile(new URL('../contracts.json', import.meta.url), 'utf8'))
+interface NpmPackageMetadata {
+  'dist-tags': {
+    latest: string
+  }
+  versions: {
+    [version: string]: {
+      gitHead?: string
+    }
+  }
+}
+
+interface GitHubRelease {
+  tag_name: string
+}
+
+interface GitHubRef {
+  object: {
+    type: string
+    url: string
+    sha: string
+  }
+}
+
+interface GitHubCompare {
+  status: string
+}
+
+interface ContractMatrix {
+  contracts: Array<{
+    status: string
+    qvac: {
+      sdk: string
+      cli: string
+      sourceRef: string
+      sdkGitHead?: string
+      cliGitHead?: string
+    }
+    lumabri: {
+      sourceRef: string
+      releaseBase?: string
+    }
+    colibri: {
+      sourceRef: string
+      release?: string
+    }
+  }>
+  repositories: {
+    lumabri: string
+    colibri: string
+  }
+}
+
+const matrix: ContractMatrix = JSON.parse(await readFile(new URL('../contracts.json', import.meta.url), 'utf8'))
 const candidate = matrix.contracts.find((contract) => contract.status === 'candidate')
 assert(candidate, 'candidate contract is missing')
 
-const githubHeaders = { Accept: 'application/vnd.github+json' }
+const githubHeaders: Record<string, string> = { Accept: 'application/vnd.github+json' }
 if (process.env.GITHUB_TOKEN) githubHeaders.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`
 
-async function json(url, options) {
+async function json(url: string, options?: { headers?: Record<string, string> }): Promise<unknown> {
   const response = await fetch(url, options)
   assert(response.ok, `${url}: HTTP ${response.status}`)
   return await response.json()
 }
 
-async function npmLatest(name) {
-  const metadata = await json(`https://registry.npmjs.org/${encodeURIComponent(name)}`)
+async function npmLatest(name: string): Promise<{ version: string; gitHead?: string }> {
+  const metadata = await json(`https://registry.npmjs.org/${encodeURIComponent(name)}`) as NpmPackageMetadata
   const version = metadata['dist-tags'].latest
-  return { version, gitHead: metadata.versions[version].gitHead }
+  return { version, gitHead: metadata.versions[version]?.gitHead }
 }
 
-function repositorySlug(repository) {
+function repositorySlug(repository: string): string {
   return new URL(repository).pathname.replace(/\.git$/, '').replace(/^\//, '')
 }
 
-async function githubLatest(repository) {
+async function githubLatest(repository: string): Promise<string> {
   const slug = repositorySlug(repository)
   const release = await json(`https://api.github.com/repos/${slug}/releases/latest`, {
     headers: githubHeaders
-  })
+  }) as GitHubRelease
   return release.tag_name
 }
 
-async function githubTagCommit(repository, tag) {
+async function githubTagCommit(repository: string, tag: string): Promise<string> {
   const slug = repositorySlug(repository)
   let object = (await json(`https://api.github.com/repos/${slug}/git/ref/tags/${encodeURIComponent(tag)}`, {
     headers: githubHeaders
-  })).object
-  while (object.type === 'tag') object = (await json(object.url, { headers: githubHeaders })).object
+  }) as GitHubRef).object
+  while (object.type === 'tag') object = (await json(object.url, { headers: githubHeaders }) as GitHubRef).object
   assert.equal(object.type, 'commit', `${tag}: tag does not resolve to a commit`)
   return object.sha
 }
 
-async function githubRelation(repository, base, head) {
+async function githubRelation(repository: string, base: string, head: string): Promise<string> {
   const slug = repositorySlug(repository)
   return (await json(`https://api.github.com/repos/${slug}/compare/${base}...${head}`, {
     headers: githubHeaders
-  })).status
+  }) as GitHubCompare).status
 }
 
 const actual = {
@@ -66,8 +118,8 @@ assert.deepEqual(actual, expected, `candidate contract is stale\nexpected ${JSON
 assert.equal(candidate.qvac.sourceRef, candidate.qvac.sdkGitHead)
 
 const [lumabriBaseRef, colibriRef] = await Promise.all([
-  githubTagCommit(matrix.repositories.lumabri, candidate.lumabri.releaseBase),
-  githubTagCommit(matrix.repositories.colibri, candidate.colibri.release)
+  githubTagCommit(matrix.repositories.lumabri, candidate.lumabri.releaseBase!),
+  githubTagCommit(matrix.repositories.colibri, candidate.colibri.release!)
 ])
 assert.equal(candidate.colibri.sourceRef, colibriRef, 'Colibri candidate SHA does not match its release tag')
 const lumabriRelation = await githubRelation(
