@@ -3,8 +3,12 @@ import { readdir, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
+interface PackageJson {
+  files?: string[]
+}
+
 const root = fileURLToPath(new URL('..', import.meta.url))
-const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
+const pkg: PackageJson = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 for (const entry of pkg.files ?? []) {
   assert(
     !String(entry).includes('native'),
@@ -21,9 +25,9 @@ const ignored = new Set([
   '.verification-venv',
   'coverage'
 ])
-const files = []
+const files: string[] = []
 
-async function walk(relative = '.') {
+async function walk(relative = '.'): Promise<void> {
   for (const entry of await readdir(path.join(root, relative), { withFileTypes: true })) {
     if (ignored.has(entry.name)) continue
     const child = path.join(relative, entry.name)

@@ -3,27 +3,35 @@ import { completion, unloadModel } from '@qvac/sdk'
 import { createQvacProviderPool } from '../dist/client.js'
 import { GATEWAY_PROTOCOL_VERSION } from '../dist/lib/gateway-client.js'
 
-function required(name) {
+interface GatewayTransport {
+  type: 'ssh'
+  host: string
+  sshPath?: string
+  identityFile?: string
+  knownHostsFile?: string
+}
+
+function required(name: string): string {
   const value = process.env[name]
   if (!value) throw new Error(`${name} is required`)
   return value
 }
 
-function positiveInteger(name, fallback) {
+function positiveInteger(name: string, fallback: number): number {
   const value = Number.parseInt(process.env[name] ?? String(fallback), 10)
   if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} must be positive`)
   return value
 }
 
-function sha256(value) {
+function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
-function reportPhase(phase) {
+function reportPhase(phase: string): void {
   process.stderr.write(`${JSON.stringify({ type: 'progress', phase })}\n`)
 }
 
-function providerPublicKeys() {
+function providerPublicKeys(): string[] {
   const value = process.env.QVAC_PROVIDER_PUBLIC_KEYS ?? required('QVAC_PROVIDER_PUBLIC_KEY')
   const keys = value.split(',').map((key) => key.trim()).filter(Boolean)
   if (keys.length === 0) throw new Error('at least one QVAC provider public key is required')
@@ -33,7 +41,7 @@ function providerPublicKeys() {
 const contractId = process.env.LUMABRI_CONTRACT_ID ?? 'stable-0.1'
 const modelFingerprint = required('LUMABRI_MODEL_FINGERPRINT')
 const publicKeys = providerPublicKeys()
-const transport = {
+const transport: GatewayTransport = {
   type: 'ssh',
   host: required('LUMABRI_SSH_HOST')
 }
@@ -57,7 +65,7 @@ const providerPool = createQvacProviderPool({
 
 const prompt = process.env.LUMABRI_PROMPT ?? 'Reply with one short greeting.'
 const startedAt = performance.now()
-let modelId
+let modelId: string | undefined
 
 try {
   reportPhase('provider-selection-started')
@@ -89,7 +97,7 @@ try {
     history: [{ role: 'user', content: prompt }]
   })
   reportPhase('completion-started')
-  let firstContentAt
+  let firstContentAt: number | undefined
   for await (const event of run.events) {
     if (event.type === 'contentDelta' && firstContentAt === undefined) {
       firstContentAt = performance.now()

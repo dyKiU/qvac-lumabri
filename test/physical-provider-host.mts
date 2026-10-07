@@ -2,7 +2,7 @@ import { startQVACProvider, stopQVACProvider } from '@qvac/sdk'
 
 let stopping = false
 
-async function stop(signal) {
+async function stop(signal: string): Promise<void> {
   if (stopping) return
   stopping = true
   try {

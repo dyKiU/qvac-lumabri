@@ -1,13 +1,36 @@
 import assert from 'node:assert/strict'
 import { readFile, writeFile } from 'node:fs/promises'
 
+interface ContractComponent {
+  release?: string
+  baseline?: string
+  sourceRef: string
+}
+
+interface Contract {
+  id: string
+  status: string
+  adapter: string
+  qvac: {
+    sdk: string
+    cli: string
+  }
+  gatewayProtocol: number
+  lumabri: ContractComponent
+  colibri: ContractComponent
+}
+
+interface ContractMatrix {
+  contracts: Contract[]
+}
+
 const startMarker = '<!-- contracts:start -->'
 const endMarker = '<!-- contracts:end -->'
-const matrix = JSON.parse(await readFile(new URL('../contracts.json', import.meta.url), 'utf8'))
+const matrix: ContractMatrix = JSON.parse(await readFile(new URL('../contracts.json', import.meta.url), 'utf8'))
 const readmeUrl = new URL('../README.md', import.meta.url)
 const readme = await readFile(readmeUrl, 'utf8')
 
-function revision(component) {
+function revision(component: ContractComponent): string {
   const label = component.release ?? component.baseline ?? component.sourceRef
   const suffix = component.sourceRef === 'main' ? '' : ` @ ${component.sourceRef.slice(0, 7)}`
   return `\`${label}${suffix}\``

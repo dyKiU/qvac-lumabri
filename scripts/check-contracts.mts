@@ -2,11 +2,74 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { GATEWAY_PROTOCOL_VERSION } from '../dist/lib/gateway-client.js'
 
-const readJson = async (name) => JSON.parse(await readFile(new URL(`../${name}`, import.meta.url)))
+interface PackageJson {
+  version: string
+  engines: { node: string }
+  peerDependencies: { '@qvac/sdk': string; zod: string }
+  devDependencies: { '@qvac/sdk': string; '@qvac/cli': string; zod: string }
+  files?: string[]
+}
+
+interface ContractMatrix {
+  schemaVersion: number
+  gateway: {
+    supported: number[]
+    preferred: number
+  }
+  runtime: {
+    node: { range: string; tested: string[] }
+    zod: { range: string; tested: string }
+    numpy: string
+  }
+  repositories: {
+    lumabri: string
+    colibri: string
+  }
+  contracts: Contract[]
+}
+
+interface Contract {
+  id: string
+  status: string
+  gatewayProtocol: number
+  adapter: string
+  primary?: boolean
+  qvac: {
+    sdk: string
+    cli: string
+    sourceRef: string
+    sdkGitHead?: string
+    cliGitHead?: string
+    delegatedPluginRpc: boolean
+  }
+  lumabri: {
+    sourceRef: string
+    releaseBase?: string
+    gatewayPatch: string
+  }
+  colibri: {
+    sourceRef: string
+    release?: string
+  }
+  nativeCapabilities: {
+    segmentRuntime: boolean
+    edgeRuntime: boolean
+    glm53Text: boolean
+    glm53Vision: boolean
+    structuredToolSideband: boolean
+  }
+  proof: string[]
+}
+
+interface QvacConfig {
+  plugins: string[]
+}
+
+const readJson = async (name: string): Promise<unknown> => JSON.parse(await readFile(new URL(`../${name}`, import.meta.url), 'utf8'))
 const [pkg, matrix, qvacConfig, readme] = await Promise.all([
-  readJson('package.json'),
-  readJson('contracts.json'),
-  readJson('qvac.config.json'),
+  readJson('package.json') as Promise<PackageJson>,
+  readJson('contracts.json') as Promise<ContractMatrix>,
+  readJson('qvac.config.json') as Promise<QvacConfig>,
   readFile(new URL('../README.md', import.meta.url), 'utf8')
 ])
 
@@ -20,15 +83,15 @@ const nativeCapabilityFields = [
   'glm53Text',
   'glm53Vision',
   'structuredToolSideband'
-]
+] as const
 
-function releaseLine(version) {
+function releaseLine(version: string): string {
   const match = /^(\d+)\.(\d+)\.\d+$/.exec(version)
   assert(match, `invalid package version: ${version}`)
   return `${match[1]}.${match[2]}.x`
 }
 
-function assertRef(contract, component) {
+function assertRef(contract: Contract, component: 'qvac' | 'lumabri' | 'colibri'): void {
   const ref = contract[component].sourceRef
   if (contract.status === 'edge') assert.equal(ref, 'main', `${contract.id}: ${component} edge ref`)
   else assert.match(ref, shaPattern, `${contract.id}: ${component} must use an exact SHA`)
@@ -44,7 +107,7 @@ assert.equal(pkg.devDependencies.zod, matrix.runtime.zod.tested)
 assert.match(matrix.runtime.numpy, exactVersionPattern)
 assert(qvacConfig.plugins.includes('@lumabri/qvac-adapter/plugin'))
 
-const ids = new Set()
+const ids = new Set<string>()
 for (const contract of matrix.contracts) {
   assert.match(contract.id, /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/)
   assert(!ids.has(contract.id), `duplicate contract id: ${contract.id}`)
@@ -70,10 +133,10 @@ for (const contract of matrix.contracts) {
     `${contract.id}: invalid Lumabri gateway patch path`
   )
   await readFile(new URL(`../${contract.lumabri.gatewayPatch}`, import.meta.url))
-  for (const component of ['qvac', 'lumabri', 'colibri']) assertRef(contract, component)
+  for (const component of ['qvac', 'lumabri', 'colibri'] as const) assertRef(contract, component)
   if (contract.status !== 'edge') {
-    assert.match(contract.qvac.sdkGitHead, shaPattern, `${contract.id}: missing QVAC SDK gitHead`)
-    assert.match(contract.qvac.cliGitHead, shaPattern, `${contract.id}: missing QVAC CLI gitHead`)
+    assert.match(contract.qvac.sdkGitHead ?? '', shaPattern, `${contract.id}: missing QVAC SDK gitHead`)
+    assert.match(contract.qvac.cliGitHead ?? '', shaPattern, `${contract.id}: missing QVAC CLI gitHead`)
   }
   assert(Array.isArray(contract.proof) && contract.proof.length > 0, `${contract.id}: missing proof`)
 }
@@ -82,7 +145,7 @@ const supported = matrix.contracts.filter((contract) => contract.status === 'sup
 assert(supported.length > 0, 'current release must have a supported contract')
 const primaryContracts = supported.filter((contract) => contract.primary)
 assert.equal(primaryContracts.length, 1, 'current release must have exactly one primary contract')
-const primary = primaryContracts[0]
+const primary = primaryContracts[0]!
 const candidate = matrix.contracts.find((contract) => contract.status === 'candidate')
 assert(candidate, 'candidate contract is missing')
 assert.equal(candidate.qvac.sourceRef, candidate.qvac.sdkGitHead)

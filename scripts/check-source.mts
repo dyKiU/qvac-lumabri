@@ -5,9 +5,9 @@ import path from 'node:path'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const roots = ['src', 'scripts', 'test']
-const files = []
+const files: string[] = []
 
-async function walk(relative) {
+async function walk(relative: string): Promise<void> {
   const absolute = path.join(root, relative)
   const entries = await readdir(absolute, { withFileTypes: true }).catch(() => null)
   if (!entries) {
@@ -17,7 +17,7 @@ async function walk(relative) {
   for (const entry of entries) {
     const child = path.join(relative, entry.name)
     if (entry.isDirectory()) await walk(child)
-    else if (/\.(?:js|mjs|ts)$/.test(entry.name)) files.push(child)
+    else if (/\.(?:js|mjs|ts|mts)$/.test(entry.name)) files.push(child)
   }
 }
 
