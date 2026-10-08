@@ -124,8 +124,8 @@
         "gatewayPatch": "native/lumabri-gateway-main.patch"
       },
       "colibri": {
-        "release": "v1.12.1",
-        "sourceRef": "ce370e87d7b623d7759b52ec2007d75fc5b0e87e"
+        "release": "v2.0.0",
+        "sourceRef": "bf2442915d6e3dd4cdfd2eb9c2a3d2aa44a25850"
       },
       "proof": [
         "unit",

@@ -1,16 +1,112 @@
+diff --git a/engine_patches/deepseek_v4_p2p.py b/engine_patches/deepseek_v4_p2p.py
+index e889dda..479386f 100644
+--- a/engine_patches/deepseek_v4_p2p.py
++++ b/engine_patches/deepseek_v4_p2p.py
+@@ -73,26 +73,14 @@ def main():
+          '        }\n'
+          '    }\n'
+          '#endif\n'),
+-        # site 2b — moe_token_pipeline: dual loader, reset selected.
+-        # Current colibri allocates a `views` array (and, under COLI_V4_GPU_TIER,
+-        # a batch path) before the per-expert loop, so the anchor is the malloc,
+-        # not the loop. selected=0 stays correct on the CPU build we compile:
+-        # the GPU batch path is #ifdef'd out, so the only tail that runs is
+-        # `output = round(output + shared)` — identical to sites 1 and 3, with
+-        # the routed partial already written remotely.
+-        #
+-        # The same `selected = 0` reaches colibri's own
+-        #     ColiExpertView *views = malloc((size_t)selected * sizeof(*views));
+-        #     if (!views) result = -1;
+-        # and malloc(0) is allowed by the standard to return NULL, which would
+-        # turn a correctly delegated layer into a failed forward. glibc happens
+-        # to return a non-null pointer, so this never fired here; that is a
+-        # property of one allocator, not of the code. Ask for one element when
+-        # there is nothing to select — the loop below is skipped either way.
++        # site 2b — moe_token_pipeline: add the remote partial, then the
++        # views array. Colibri v2.0.0 already allocates one element when
++        # selected is 0, so a delegated layer cannot turn malloc(0) into a
++        # failed forward. Leave that allocation unchanged.
+         ('    if (!result) memset(output, 0, (size_t)d * sizeof(*output));\n'
+          '\n'
+          '#ifdef COLI_V4_EXPERIMENTAL_DUAL_EXPERT_LOADER\n'
+-         '    ColiExpertView *views = malloc((size_t)selected * sizeof(*views));',
++         '    ColiExpertView *views = malloc((size_t)(selected ? selected : 1) * sizeof(*views));',
+          '    if (!result) memset(output, 0, (size_t)d * sizeof(*output));\n'
+          '#ifdef LUMABRI_P2P\n'
+          '    if (!result && lumi_partial) {\n'
+@@ -102,8 +90,7 @@ def main():
+          '#endif\n'
+          '\n'
+          '#ifdef COLI_V4_EXPERIMENTAL_DUAL_EXPERT_LOADER\n'
+-         '    ColiExpertView *views =\n'
+-         '        malloc((size_t)(selected > 0 ? selected : 1) * sizeof(*views));'),
++         '    ColiExpertView *views = malloc((size_t)(selected ? selected : 1) * sizeof(*views));'),
+         # site 3 — v4_moe_batch_union: batch, reset n
+         ('    if (!result)\n'
+          '        memset(outputs, 0, (size_t)batch * d * sizeof(*outputs));\n'
 diff --git a/engine_patches/make_patches.py b/engine_patches/make_patches.py
-index 90da14c..cc9359e 100755
+index 90da14c..5bed94e 100755
 --- a/engine_patches/make_patches.py
 +++ b/engine_patches/make_patches.py
-@@ -269,7 +269,7 @@ QWEN36 = [
-             lumi_moe_apply(layer, idx, val, K, xs, D, out + (int64_t)s*D)) {
-         } else
+@@ -177,7 +177,9 @@ KIMI = [
+     }
  #endif
--""", where="before"),
-+       """),
+ """),
+-    hook("""        experts_apply_union(m,li,nu,uid,pfirst,pcnt,poslist,wlist,z,LT,u,gate,up,hz);
++    # Colibri v2.0.0 added the Vulkan result buffer (R, rslot). The U-writing
++    # call passes NULL,NULL; device-backed calls must stay local.
++    hook("""        experts_apply_union(m,li,nu,uid,pfirst,pcnt,poslist,wlist,z,LT,u,gate,up,hz,NULL,NULL);
+ """, """#ifdef LUMIBRI_P2P
+         if(lumi_layer_on(li)){
+             /* the union the engine just built, executed on peers; the router
+@@ -264,10 +266,15 @@ QWEN36 = [
+     atexit(lumi_report);
+ #endif
+ """),
+-    hook("        if (use_xf) {\n", """#ifdef LUMIBRI_P2P
+-        if (!use_xf && !use_qt && lumi_layer_on(layer) &&
+-            lumi_moe_apply(layer, idx, val, K, xs, D, out + (int64_t)s*D)) {
+-        } else
++    # Colibri v2.0.0 folded the planar runner into `else if (use_xf || use_vk)`.
++    # Anchor the legacy CPU loop (expert_hold) so Hybrid still skips only the
++    # arithmetic our glue implements, and leaves qq/xf/vk/qt runners alone.
++    hook("""            for (int kk = 0; kk < K; kk++) {
++                Slot *e = expert_hold(m, layer, idx[kk]);   /* the PILOT worker may not evict it mid-matmul */
++""", """#ifdef LUMIBRI_P2P
++            if (!use_qq && !use_xf && !use_vk && !use_qt && lumi_layer_on(layer) &&
++                lumi_moe_apply(layer, idx, val, K, xs, D, out + (int64_t)s*D)) {
++            } else
+ #endif
+ """, where="before"),
  ]
- 
- ENGINES = {
+@@ -307,7 +314,9 @@ def olmoe_local_callback(src):
+     """
+     start = "            Slot *e; expert_get(m, layer, idx[kk], &e);\n"
+     stop = "            float w = val[kk];\n"
+-    anchor = "static void moe(Model *m, Layer *l, int layer, float *x, int S, float *out) {"
++    # Colibri v2.0.0 moved the decode row into moe_routed, ahead of moe().
++    # The helpers have to be defined before that call.
++    anchor = "static void moe_routed(Model *m, int layer, float *x, int S, float *logits, float *out) {"
+     if src.count(start) != 1 or src.count(stop) != 1 or src.count(anchor) != 1:
+         raise SystemExit("olmoe.c: local expert kernel anchors changed")
+     begin, end = src.index(start), src.index(stop)
+@@ -332,9 +341,15 @@ static int lmb_olmoe_reference(void *opaque, int layer, int expert,
+     LmbOlmoeLocal *ctx = opaque;
+     Model *m = ctx->m;
+     const char *idot = getenv("IDOT");
++    /* Segment objects compile with OLMOE_NO_MAIN and without AVX2, which
++     * leaves g_fused3 out of this translation unit. Fused3 is off there. */
++    int fused3 = 0;
++#if defined(__AVX2__) || !defined(OLMOE_NO_MAIN)
++    fused3 = g_fused3;
++#endif
+     if (D != m->c.hidden || layer < 0 || layer >= m->c.n_layers ||
+         expert < 0 || expert >= m->c.n_experts || m->quant_bits != 8 ||
+-        (idot && *idot == '1') || g_fused3 || g_pilot) return -1;
++        (idot && *idot == '1') || fused3 || g_pilot) return -1;
+     /* Do not call expert_get: a reference must NEVER fetch a missing weight.
+      * The model's existing cache lock protects the resident slot lifetime. */
+     pthread_mutex_lock(&g_pilot_mx);
 diff --git a/gateway_test.sh b/gateway_test.sh
 new file mode 100755
 index 0000000..2371859
@@ -95,7 +191,7 @@ index 0000000..2371859
 +run_case "$T/line" "line: hello world 🦜" "$T/line.out"
 +echo "  ✓ prompt dialect and reset-before-generate"
 diff --git a/lumabri.c b/lumabri.c
-index 10ac924..b70a493 100644
+index 9ef257d..2e68d6e 100644
 --- a/lumabri.c
 +++ b/lumabri.c
 @@ -3,6 +3,7 @@
@@ -240,7 +336,7 @@ index 10ac924..b70a493 100644
  /* A growable capture of the assistant's reply, to feed back as history. */
  typedef struct { char *p; size_t len, cap; } Cap;
  static int cap_add(Cap *c, const char *d, size_t n) {
-@@ -5230,6 +5264,427 @@ static int cmd_chat(int argc, char **argv) {
+@@ -5249,6 +5283,427 @@ static int cmd_chat(int argc, char **argv) {
      return chat_failed;
  }
  
@@ -668,7 +764,7 @@ index 10ac924..b70a493 100644
  /* ---- key: the operator's identity ---------------------------------------
   * Ed25519 keypair. The secret signs the swarm's ground truth and belongs
   * only on the machine that owns the model — ideally offline, since the
-@@ -6455,6 +6910,8 @@ int main(int argc, char **argv) {
+@@ -6474,6 +6929,8 @@ int main(int argc, char **argv) {
      if (argc >= 2 && !strcmp(argv[1], "serve")) return cmd_serve(argc - 2, argv + 2);
      if (argc == 2 && !strcmp(argv[1], "chat") && g_tty && isatty(0)) return cmd_home();
      if (argc >= 2 && !strcmp(argv[1], "chat")) return cmd_chat(argc - 2, argv + 2);
@@ -677,7 +773,7 @@ index 10ac924..b70a493 100644
      /* Interactive entry points share one workspace. Explicit flags remain
       * available to scripts without inheriting an implicit sharing role. */
      if (argc == 1 && g_tty) return cmd_home();
-@@ -6471,6 +6928,7 @@ int main(int argc, char **argv) {
+@@ -6490,6 +6947,7 @@ int main(int argc, char **argv) {
          "  lumabri peer-key                                           print this machine's endpoint identity\n"
          "  lumabri serve --model DIR [--port 7300] [--join TRACKER]   share a model\n"
          "  lumabri chat  [--tracker HOST:7300] [--model NAME]         chat with it\n"
@@ -685,3 +781,31 @@ index 10ac924..b70a493 100644
          "  lumabri key   [--out NAME]                                 operator keypair\n");
      return 2;
  }
+diff --git a/tools/prepare_v41_range.py b/tools/prepare_v41_range.py
+index 19eb9e6..092e799 100644
+--- a/tools/prepare_v41_range.py
++++ b/tools/prepare_v41_range.py
+@@ -20,8 +20,10 @@ def replace_once(text, before, after):
+ def prepare(text):
+     # These hooks are audited against this source, not against similarly named
+     # functions in a future release. Deliberate revalidation is required.
+-    if hashlib.sha256(text.encode()).hexdigest() != '29957921abf6febf6c409b3aac22319065acddc6f9e303df1b4e02b30d10b141':
+-        raise ValueError('V4.1 range engine requires pinned Colibri 1.12.1')
++    # Colibri v2.0.0 (bf244291) kept the audited sites; the forward loop now
++    # starts at `chained` so a Vulkan prefix is not run again on the CPU.
++    if hashlib.sha256(text.encode()).hexdigest() != 'f34241f5c1094468e61a0428fbdf189799881c0f1dae4b55a60b7548c01733e0':
++        raise ValueError('V4.1 range engine requires pinned Colibri v2.0.0')
+     text = replace_once(text, '    int fd_w, fd_s;\n    int64_t off_w, off_s, rows;',
+                         '    int fd_w, fd_s;\n    uint8_t *resident_w, *resident_s;\n    int64_t off_w, off_s, rows;')
+     text = replace_once(text, '    t->rows = w->nbytes / head_dim;', '''    t->rows = w->nbytes / head_dim;
+@@ -79,8 +81,8 @@ def prepare(text):
+     f = replace_once(f, '    /* V41_TRACE=2', '''    if (m->boundary_mix) memcpy(pre_mix, m->boundary_mix, (size_t)n * hc * sizeof(float));
+ 
+     /* V41_TRACE=2''')
+-    f = replace_once(f, '    for (int layer = 0; layer < c->n_layers; layer++) {',
+-                    '    for (int layer = m->range_enabled ? m->range_begin : 0;\n         layer < (m->range_enabled ? m->range_end : c->n_layers); layer++) {')
++    f = replace_once(f, '    for (int layer = chained; layer < c->n_layers; layer++) {',
++                    '    for (int layer = m->range_enabled ? m->range_begin : chained;\n         layer < (m->range_enabled ? m->range_end : c->n_layers); layer++) {')
+     f = replace_once(f, "    /* the last block's FFN mix collapses the stream one final time */", """    if (m->boundary_output) {
+         memcpy(m->boundary_output, h, (size_t)n * hc * dim * sizeof(float));
+         memcpy(m->boundary_output_mix, pre_mix, (size_t)n * hc * sizeof(float));
