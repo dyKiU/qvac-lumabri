@@ -191,7 +191,7 @@ index 0000000..2371859
 +run_case "$T/line" "line: hello world 🦜" "$T/line.out"
 +echo "  ✓ prompt dialect and reset-before-generate"
 diff --git a/lumabri.c b/lumabri.c
-index 9ef257d..2e68d6e 100644
+index 796fb6c..705c4a6 100644
 --- a/lumabri.c
 +++ b/lumabri.c
 @@ -3,6 +3,7 @@
@@ -336,7 +336,7 @@ index 9ef257d..2e68d6e 100644
  /* A growable capture of the assistant's reply, to feed back as history. */
  typedef struct { char *p; size_t len, cap; } Cap;
  static int cap_add(Cap *c, const char *d, size_t n) {
-@@ -5249,6 +5283,427 @@ static int cmd_chat(int argc, char **argv) {
+@@ -5285,6 +5319,427 @@ static int cmd_chat(int argc, char **argv) {
      return chat_failed;
  }
  
@@ -764,7 +764,7 @@ index 9ef257d..2e68d6e 100644
  /* ---- key: the operator's identity ---------------------------------------
   * Ed25519 keypair. The secret signs the swarm's ground truth and belongs
   * only on the machine that owns the model — ideally offline, since the
-@@ -6474,6 +6929,8 @@ int main(int argc, char **argv) {
+@@ -6510,6 +6965,8 @@ int main(int argc, char **argv) {
      if (argc >= 2 && !strcmp(argv[1], "serve")) return cmd_serve(argc - 2, argv + 2);
      if (argc == 2 && !strcmp(argv[1], "chat") && g_tty && isatty(0)) return cmd_home();
      if (argc >= 2 && !strcmp(argv[1], "chat")) return cmd_chat(argc - 2, argv + 2);
@@ -773,7 +773,7 @@ index 9ef257d..2e68d6e 100644
      /* Interactive entry points share one workspace. Explicit flags remain
       * available to scripts without inheriting an implicit sharing role. */
      if (argc == 1 && g_tty) return cmd_home();
-@@ -6490,6 +6947,7 @@ int main(int argc, char **argv) {
+@@ -6526,6 +6983,7 @@ int main(int argc, char **argv) {
          "  lumabri peer-key                                           print this machine's endpoint identity\n"
          "  lumabri serve --model DIR [--port 7300] [--join TRACKER]   share a model\n"
          "  lumabri chat  [--tracker HOST:7300] [--model NAME]         chat with it\n"
