@@ -43,8 +43,9 @@ when `check:native-upstreams` or the upstream-head CI job fails.
 ## Autofix automation (optional)
 
 When **Upstream compatibility** fails on `main`, `.github/workflows/upstream-autofix.yml`
-can launch a Cursor Cloud Agent (requires `CURSOR_API_KEY`). Verification
-without spending agent credits:
+can launch a Cursor Cloud Agent (requires `CURSOR_API_KEY`). The workflow sets
+`CURSOR_AGENT_MODEL` (default `composer-2.5`) and passes it as `model.id` on
+`POST https://api.cursor.com/v1/agents`. Verification without spending agent credits:
 
 1. **Workflow parse / key smoke test:** Actions → **Upstream autofix** →
    **Run workflow** → enable **`force_launch`** (minimal API call, no PR).

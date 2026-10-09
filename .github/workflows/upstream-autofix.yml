@@ -16,6 +16,10 @@ name: Upstream autofix
 #   Upstream compatibility (fail on main) → workflow_run → this workflow → agent PR
 #   → Verify (pass) → Auto-merge upstream autofix (CURSOR_API_KEY + token metadata).
 # See docs/lumabri-gateway-patch.md § Autofix automation.
+# Agent model: CURSOR_AGENT_MODEL → POST /v1/agents body `model.id` (see Cursor Cloud Agents API docs).
+
+env:
+  CURSOR_AGENT_MODEL: composer-2.5
 
 on:
   workflow_run:
@@ -156,9 +160,11 @@ jobs:
               --arg text "$prompt" \
               --arg url "$REPO_URL" \
               --arg merge_token "$merge_token" \
+              --arg model "$CURSOR_AGENT_MODEL" \
               '{
                 name: "Upstream autofix manual test",
                 prompt: { text: $text },
+                model: { id: $model },
                 repos: [{ url: $url, startingRef: "main" }],
                 autoCreatePR: false,
                 metadata: {
@@ -196,9 +202,11 @@ jobs:
               --arg run_id "$UPSTREAM_RUN_ID" \
               --arg run_url "$RUN_URL" \
               --arg merge_token "$merge_token" \
+              --arg model "$CURSOR_AGENT_MODEL" \
               '{
                 name: "Upstream compat autofix",
                 prompt: { text: $text },
+                model: { id: $model },
                 repos: [{ url: $url, startingRef: "main" }],
                 autoCreatePR: true,
                 metadata: {
