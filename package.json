@@ -83,7 +83,7 @@
     "@types/node": "20.19.24",
     "tsx": "^4.23.15",
     "typescript": "5.9.3",
-    "zod": "4.4.3"
+    "zod": "4.5.1"
   },
   "overrides": {
     "@fastify/static": "10.1.2"
