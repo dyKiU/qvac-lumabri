@@ -79,7 +79,7 @@
   },
   "devDependencies": {
     "@qvac/cli": "0.12.0",
-    "@qvac/sdk": "0.18.1",
+    "@qvac/sdk": "0.18.2",
     "@types/node": "20.19.24",
     "tsx": "^4.23.15",
     "typescript": "5.9.3",
