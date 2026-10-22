@@ -12,7 +12,7 @@
     },
     "zod": {
       "range": ">=4.4.3 <5.0.0",
-      "tested": "4.4.3"
+      "tested": "4.6.5"
     },
     "numpy": "2.2.6"
   },
@@ -102,11 +102,11 @@
       "status": "candidate",
       "adapter": "main",
       "qvac": {
-        "sdk": "0.21.0",
-        "sdkGitHead": "ffff93cc7c31ea12c547c4b6bbfce4168f6a8e2c",
-        "cli": "0.15.0",
-        "cliGitHead": "c5ea23c997e1421e34aae436508e73af7d9e0972",
-        "sourceRef": "ffff93cc7c31ea12c547c4b6bbfce4168f6a8e2c",
+        "sdk": "0.22.0",
+        "sdkGitHead": "9e6db51af45d97851c5cae675b099d2864b9fb5c",
+        "cli": "0.16.0",
+        "cliGitHead": "1e5b13d9f657e565321b50f78caf95bd13fc49ed",
+        "sourceRef": "9e6db51af45d97851c5cae675b099d2864b9fb5c",
         "delegatedPluginRpc": false
       },
       "gatewayProtocol": 1,
@@ -120,7 +120,7 @@
       "lumabri": {
         "releaseBase": "v0.8.0",
         "baseline": "post-v0.8.0",
-        "sourceRef": "941a2d03b390391a841782f1e70df39d5b4aa71f",
+        "sourceRef": "a0b0463abd9f7a22ea0e3c001f96ba1ffe8d653f",
         "gatewayPatch": "native/lumabri-gateway-main.patch"
       },
       "colibri": {
