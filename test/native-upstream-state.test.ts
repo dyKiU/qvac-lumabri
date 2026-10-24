@@ -30,6 +30,12 @@ const current = {
 test('reports a fully current native candidate', () => {
   assert.deepEqual(nativeUpstreamChanges(candidate, current), [])
 })
+test('ignores colibri main ahead of its pinned release tag', () => {
+  const ahead = structuredClone(current)
+  ahead.colibri.head = '1111111111111111111111111111111111111111'
+  assert.deepEqual(nativeUpstreamChanges(candidate, ahead), [])
+})
+
 test('detects independent head and release changes', () => {
   const changed = structuredClone(current)
   changed.lumabri.head = '1111111111111111111111111111111111111111'
@@ -42,6 +48,12 @@ test('detects independent head and release changes', () => {
       kind: 'head',
       expected: candidate.lumabri.sourceRef,
       actual: changed.lumabri.head
+    },
+    {
+      component: 'colibri',
+      kind: 'head',
+      expected: candidate.colibri.sourceRef,
+      actual: changed.colibri.releaseRef
     },
     {
       component: 'colibri',
