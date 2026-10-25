@@ -30,6 +30,13 @@ const current = {
 test('reports a fully current native candidate', () => {
   assert.deepEqual(nativeUpstreamChanges(candidate, current), [])
 })
+test('ignores Colibri main drift when pinned to the release tag', () => {
+  const pinned = structuredClone(current)
+  pinned.colibri.head = '3333333333333333333333333333333333333333'
+
+  assert.deepEqual(nativeUpstreamChanges(candidate, pinned), [])
+})
+
 test('detects independent head and release changes', () => {
   const changed = structuredClone(current)
   changed.lumabri.head = '1111111111111111111111111111111111111111'
