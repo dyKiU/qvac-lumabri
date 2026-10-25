@@ -39,7 +39,8 @@ export function nativeUpstreamChanges(candidate: NativeCandidate, current: Nativ
       : candidate.colibri.release
     const expectedHead = candidate[component].sourceRef
 
-    if (current[component].head !== expectedHead) {
+    const colibriPinnedToRelease = component === 'colibri' && expectedHead === current.colibri.releaseRef
+    if (!colibriPinnedToRelease && current[component].head !== expectedHead) {
       changes.push({
         component,
         kind: 'head',
