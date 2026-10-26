@@ -25,6 +25,9 @@ lines are what this npm release targets.
   Edge stays on git `main`.
 - **`npm install` will not satisfy** candidate QVAC versions via
   `peerDependencies` — that is intentional.
+- Lumabri and Colibri `sourceRef` values track `main`. Their release tags
+  may be older commits. `check:freshness` requires each release tag to be
+  the pin or an ancestor of it.
 - Uses `native/lumabri-gateway-main.patch` (Lumabri `main`-line pins).
 
 ## Edge (`upstream-head`)

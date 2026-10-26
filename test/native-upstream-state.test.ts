@@ -48,12 +48,12 @@ test('detects independent head and release changes', () => {
       kind: 'release',
       expected: candidate.colibri.release,
       actual: changed.colibri.release
-    },
-    {
-      component: 'colibri',
-      kind: 'release-ref',
-      expected: candidate.colibri.sourceRef,
-      actual: changed.colibri.releaseRef
     }
   ])
+})
+test('allows main to move ahead of the latest release tag', () => {
+  const moved = structuredClone(current)
+  moved.lumabri.releaseRef = '3333333333333333333333333333333333333333'
+  moved.colibri.releaseRef = '4444444444444444444444444444444444444444'
+  assert.deepEqual(nativeUpstreamChanges(candidate, moved), [])
 })

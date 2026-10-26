@@ -60,7 +60,7 @@
     "docs:contracts": "node --import tsx scripts/render-contracts.mts --write",
     "pack:check": "npm pack --dry-run",
     "prepack": "npm run build",
-    "test": "npm run build && node --import tsx --test test/gateway-client.test.ts test/latest-qvac.test.ts test/native-upstream-state.test.ts test/prompt.test.ts test/provider-pool.test.ts",
+    "test": "npm run build && node --import tsx --test test/gateway-client.test.ts test/latest-qvac.test.ts test/native-upstream-state.test.ts test/prompt.test.ts test/provider-pool.test.ts test/refresh-candidate-pins.test.ts",
     "test:qvac": "npm run build && node --import tsx test/qvac-e2e.mts",
     "test:qvac:ssh": "npm run build && node --import tsx test/qvac-ssh-e2e.mts",
     "test:physical": "npm run build && node --import tsx test/physical-provider-e2e.mts",

@@ -27,8 +27,9 @@ patch no longer applies. Typical fix:
    serve-codec or Qwen3.6 hooks).
 3. Regenerate the patch file from the diff against vanilla Lumabri at the new
    base: `git diff <new-base>...` → update `native/lumabri-gateway-main.patch`.
-4. Bump `dev-next` Lumabri `sourceRef` in `contracts.json`; run
-   `npm run check`, `check:native-upstreams`, `check:freshness`, `docs:contracts`.
+4. Bump `dev-next` Lumabri and Colibri `sourceRef` values to the new `main`
+   SHAs. A release tag may remain behind `main`. Run `npm run check`,
+   `check:native-upstreams`, `check:freshness`, and `docs:contracts`.
 
 `scripts/apply-lumabri-gateway.sh` runs `git apply --check` first; on failure
 it prints remediation hints.

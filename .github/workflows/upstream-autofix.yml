@@ -13,8 +13,9 @@ name: Upstream autofix
 #   (useful to verify CURSOR_API_KEY; uses a minimal test prompt, autoCreatePR: false).
 #
 # End-to-end path after a real upstream failure (no extra agent launches required to read):
-#   Upstream compatibility (fail on main) → workflow_run → this workflow → agent PR
-#   → Verify (pass) → Auto-merge upstream autofix (CURSOR_API_KEY + token metadata).
+#   Upstream compatibility (fail on main, Lumabri or QVAC canary) → this workflow → agent PR
+#   → Upstream compatibility (pass on the PR) → Auto-merge (CURSOR_API_KEY + token metadata).
+# Pin-only drift is Upstream pin refresh, not this workflow.
 # See docs/lumabri-gateway-patch.md § Autofix automation.
 # Agent model: CURSOR_AGENT_MODEL → POST /v1/agents body `model.id` (see Cursor Cloud Agents API docs).
 
@@ -110,9 +111,33 @@ jobs:
           fi
           echo "CURSOR_API_KEY not set; skipping autofix agent launch."
 
+      - name: Launch only when a canary failed
+        id: canary
+        if: steps.key.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.upstream.outputs.run_id }}
+          FORCE_LAUNCH: ${{ inputs.force_launch }}
+        run: |
+          set -euo pipefail
+          if [ "$FORCE_LAUNCH" = true ] || [ -z "$RUN_ID" ]; then
+            echo "launch=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          canary_failed=$(
+            gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs \
+              --jq '[.jobs[] | select(.conclusion == "failure") | .name | select(startswith("Lumabri + Colibri") or startswith("QVAC SDK"))] | length'
+          )
+          if [ "$canary_failed" = 0 ]; then
+            echo "No Lumabri or QVAC canary failure. Pin drift is handled by Upstream pin refresh."
+            echo "launch=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "launch=true" >> "$GITHUB_OUTPUT"
+
       - name: Collect failed upstream logs
         id: logs
-        if: steps.key.outputs.present == 'true'
+        if: steps.canary.outputs.launch == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ steps.upstream.outputs.run_id }}
@@ -128,14 +153,14 @@ jobs:
               --jq '[.jobs[] | select(.conclusion == "failure") | .name] | join(", ")'
           )
           gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed \
-            | tail -n 250 > failed-log.txt
+            | tail -n 40 > failed-log.txt
           {
             echo "failed_jobs=$failed_jobs"
             echo "run_url=${{ steps.upstream.outputs.run_url }}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Launch Cursor Cloud Agent
-        if: steps.key.outputs.present == 'true'
+        if: steps.canary.outputs.launch == 'true'
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           REPO_URL: https://github.com/${{ github.repository }}
@@ -186,13 +211,14 @@ jobs:
           - Rebase native/lumabri-gateway-main.patch if Lumabri main changed.
           - Keep README contract markers in sync (npm run docs:contracts).
           - Follow AGENTS.md: minimal scope, run npm run check and npm run check:hygiene before opening a PR.
-          - Create a branch named cursor/upstream-compat-29e5 (or cursor/<short-topic>-29e5) off main.
+          - Create a new branch off main using this run's assigned cursor/<topic>-<suffix> name. Do not reuse a previous run's branch.
+          - Change only contracts.json, README.md, and native/lumabri-gateway-main.patch.
           - PR title must start with "Refresh upstream compatibility".
           - PR description must include these exact markers on their own lines:
             <!-- upstream-autofix -->
             <!-- upstream-autofix-token:${merge_token} -->
 
-          Recent failure log (tail):
+          Error excerpt from the failed canary (last 40 lines):
 
           $(cat failed-log.txt)
           EOF
