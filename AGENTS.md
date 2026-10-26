@@ -31,10 +31,13 @@
 When Lumabri `main` moves and `native/lumabri-gateway-main.patch` fails to apply:
 
 - Follow [docs/lumabri-gateway-patch.md](docs/lumabri-gateway-patch.md).
-- Update `dev-next` Lumabri `sourceRef` in `contracts.json` and run
-  `npm run docs:contracts`, `check:native-upstreams`, and `check:freshness`.
+- Update `dev-next` Lumabri and Colibri `sourceRef` values to current `main`.
+  Release tags may sit behind `main`. Run `npm run docs:contracts`,
+  `check:native-upstreams`, and `check:freshness`.
 - Keep supported-line `native/lumabri-gateway.patch` unchanged unless promoting
   pins for a release.
+- Pin-only drift is refreshed by `.github/workflows/upstream-pin-refresh.yml`.
+  Autofix launches only when a Lumabri or QVAC canary job fails.
 
 ## Upstream autofix workflows
 

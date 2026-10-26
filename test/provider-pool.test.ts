@@ -1,17 +1,21 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import type { QvacProviderDescriptor, QvacLoadModelOptions, QvacHealthCheckOptions } from '@qvac/sdk'
 import {
   providerOperationsForSdk,
   QvacProviderPool,
-  QvacProviderPoolError
+  QvacProviderPoolError,
+  type QvacLoadDelegate,
+  type QvacLoadModelOperation,
+  type QvacProvider
 } from '../dist/lib/provider-pool.js'
+
+type DelegatedLoadOptions = Parameters<QvacLoadModelOperation>[0]
 
 const CONTRACT = 'stable-0.1'
 const MODEL = 'sha256:model-a'
 const key = (digit: string): string => digit.repeat(64)
 
-function provider(digit: string, overrides: Partial<QvacProviderDescriptor> = {}): QvacProviderDescriptor {
+function provider(digit: string, overrides: Partial<QvacProvider> = {}): QvacProvider {
   return {
     providerPublicKey: key(digit),
     contractId: CONTRACT,
@@ -45,8 +49,8 @@ test('returns only healthy providers matching the required contract and model', 
 })
 
 test('retries delegated load on the next healthy provider and records the pin', async () => {
-  const attempts: QvacLoadModelOptions[] = []
-  const loadOptions: Omit<QvacLoadModelOptions, 'delegate'> = {
+  const attempts: DelegatedLoadOptions[] = []
+  const loadOptions: Omit<DelegatedLoadOptions, 'delegate'> = {
     modelSrc: '',
     modelType: 'lumabri-moe',
     modelConfig: { model: 'model-a', tracker: 'tracker.example:7300' }
@@ -144,7 +148,7 @@ test('rejects a caller-supplied delegate because the pool owns provider selectio
       modelType: 'lumabri-moe',
       modelConfig: {},
       delegate: { providerPublicKey: key('f') }
-    } as QvacLoadModelOptions),
+    } as DelegatedLoadOptions),
     /delegate is managed by QvacProviderPool/
   )
 })
@@ -216,7 +220,7 @@ test('reports heartbeat failures without attempting model loads', async () => {
 })
 
 test('propagates explicit connection options to the selected provider', async () => {
-  let delegated: QvacHealthCheckOptions | undefined
+  let delegated: QvacLoadDelegate | undefined
   const pool = new QvacProviderPool({
     providers: [provider('a')],
     contractId: CONTRACT,
@@ -269,7 +273,7 @@ test('updates and forgets the observed provider when a model id is reused', asyn
 test('keeps provider failure metadata bounded to public contract fields', async () => {
   const secretMarker = 'private-provider-configuration'
   const pool = new QvacProviderPool({
-    providers: [provider('a', { operatorSecret: secretMarker, label: 'provider-a' } as QvacProviderDescriptor)],
+    providers: [provider('a', { operatorSecret: secretMarker, label: 'provider-a' })],
     contractId: CONTRACT,
     modelFingerprint: MODEL,
     heartbeat: async () => {

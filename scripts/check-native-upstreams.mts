@@ -55,14 +55,8 @@ export function nativeUpstreamChanges(candidate: NativeCandidate, current: Nativ
         actual: current[component].release
       })
     }
-    if (component === 'colibri' && current.colibri.releaseRef !== expectedHead) {
-      changes.push({
-        component,
-        kind: 'release-ref',
-        expected: expectedHead,
-        actual: current.colibri.releaseRef
-      })
-    }
+    // releaseRef is the latest release tag. dev-next may sit on main ahead of
+    // that tag. check:freshness requires the tag to be an ancestor of the pin.
   }
   return changes
 }

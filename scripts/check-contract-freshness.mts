@@ -121,11 +121,10 @@ const [lumabriBaseRef, colibriRef] = await Promise.all([
   githubTagCommit(matrix.repositories.lumabri, candidate.lumabri.releaseBase!),
   githubTagCommit(matrix.repositories.colibri, candidate.colibri.release!)
 ])
-assert.equal(candidate.colibri.sourceRef, colibriRef, 'Colibri candidate SHA does not match its release tag')
-const lumabriRelation = await githubRelation(
-  matrix.repositories.lumabri,
-  lumabriBaseRef,
-  candidate.lumabri.sourceRef
-)
+const [lumabriRelation, colibriRelation] = await Promise.all([
+  githubRelation(matrix.repositories.lumabri, lumabriBaseRef, candidate.lumabri.sourceRef),
+  githubRelation(matrix.repositories.colibri, colibriRef, candidate.colibri.sourceRef)
+])
 assert(['ahead', 'identical'].includes(lumabriRelation), 'Lumabri candidate is not based on its release')
+assert(['ahead', 'identical'].includes(colibriRelation), 'Colibri candidate is not based on its release')
 process.stdout.write(`Candidate freshness: PASS (${actual.qvacSdk.version}, ${actual.qvacCli.version}, ${actual.lumabri}, ${actual.colibri})\n`)

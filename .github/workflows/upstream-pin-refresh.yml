@@ -1,0 +1,117 @@
+name: Upstream pin refresh
+
+# Opens a pin-only pull request when Upstream compatibility fails because
+# dev-next is stale and the Lumabri/QVAC canaries still succeeded.
+# A failed canary is left to Upstream autofix.
+
+on:
+  workflow_run:
+    workflows: [Upstream compatibility]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-pin-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Refresh only when canaries passed and pins drifted
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          jobs=$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs --jq '.jobs')
+          canary_failed=$(echo "$jobs" | jq '[.[] | select(.conclusion == "failure") | .name | select(startswith("Lumabri + Colibri") or startswith("QVAC SDK"))] | length')
+          canary_ok=$(echo "$jobs" | jq '[.[] | select(.conclusion == "success") | .name | select(startswith("Lumabri + Colibri") or startswith("QVAC SDK"))] | length')
+          drift=$(echo "$jobs" | jq '[.[] | select(.conclusion == "failure") | .name | select(. == "Candidate release freshness" or . == "Detect Lumabri / Colibri changes")] | length')
+          if [ "$canary_failed" != 0 ]; then
+            echo "A canary failed. Upstream autofix owns that run."
+            echo "refresh=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$canary_ok" = 0 ] || [ "$drift" = 0 ]; then
+            echo "No successful canary with pin drift. Skipping pin refresh."
+            echo "refresh=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "refresh=true" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout adapter
+        if: steps.gate.outputs.refresh == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.gate.outputs.refresh == 'true'
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Update dev-next pins
+        if: steps.gate.outputs.refresh == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          npm ci
+          node --import tsx scripts/refresh-candidate-pins.mts
+          npm run docs:contracts
+          if git diff --quiet -- contracts.json README.md; then
+            echo "Pins already match live upstreams."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+        id: pins
+
+      - name: Confirm the main gateway patch applies
+        if: steps.gate.outputs.refresh == 'true' && steps.pins.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          ref=$(node -p "require('./contracts.json').contracts.find(c => c.status === 'candidate').lumabri.sourceRef")
+          git clone --depth 1 https://github.com/JustVugg/lumabri.git "$RUNNER_TEMP/lumabri"
+          if [ "$(git -C "$RUNNER_TEMP/lumabri" rev-parse HEAD)" != "$ref" ]; then
+            git -C "$RUNNER_TEMP/lumabri" fetch --depth 1 origin "$ref"
+            git -C "$RUNNER_TEMP/lumabri" checkout "$ref"
+          fi
+          scripts/apply-lumabri-gateway.sh "$RUNNER_TEMP/lumabri" native/lumabri-gateway-main.patch
+
+      - name: Open pin refresh pull request
+        if: steps.gate.outputs.refresh == 'true' && steps.pins.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          existing=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 50 \
+            --json number,headRefName \
+            --jq '[.[] | select(.headRefName | startswith("cursor/upstream-pins-"))][0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "Pin refresh PR #${existing} is already open."
+            exit 0
+          fi
+          branch="cursor/upstream-pins-${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          local_part="41898282+github-actions[bot]"
+          git config user.email "${local_part}@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add contracts.json README.md
+          git commit -m "Refresh dev-next pins to current upstreams"
+          git push origin "HEAD:${branch}"
+          node --input-type=module -e 'import { writeFileSync } from "node:fs"; writeFileSync("pr-body.md", "<!-- upstream-pin-refresh -->\n\nUpdate dev-next Lumabri and Colibri pins to current main, and QVAC pins to npm latest.\n\nThe candidate and edge canaries on this pull request are the merge gate.\n")'
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+            --title "Refresh dev-next upstream pins" \
+            --body-file pr-body.md

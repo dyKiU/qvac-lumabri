@@ -15,12 +15,19 @@ lines are what this npm release targets.
 
 ## Candidate (`dev-next`)
 
-- Tracks **newer npm releases** (for example QVAC SDK `0.21.x`) and newer
-  Lumabri/Colibri heads before they become supported.
+- Tracks the newest published `@qvac/sdk` and `@qvac/cli`. Upstream
+  compatibility runs `npm run check:freshness` on every schedule and push to
+  `main`. That check fails when `dev-next` version or `gitHead` lags npm
+  `latest`. `qvac.sourceRef` stays the SDK `gitHead`.
+- The candidate QVAC canary checks out that same npm latest SDK commit, packs
+  it, and runs the adapter against the tarball. A release is therefore built
+  on the day it is published, including before `contracts.json` records it.
+  Edge stays on git `main`.
 - **`npm install` will not satisfy** candidate QVAC versions via
-  `peerDependencies` — that is intentional. Compatibility is proven in
-  **Upstream compatibility** CI, which installs packed QVAC SDK tarballs built
-  from the candidate `sourceRef`, not from npm `@qvac/sdk@latest` alone.
+  `peerDependencies` — that is intentional.
+- Lumabri and Colibri `sourceRef` values track `main`. Their release tags
+  may be older commits. `check:freshness` requires each release tag to be
+  the pin or an ancestor of it.
 - Uses `native/lumabri-gateway-main.patch` (Lumabri `main`-line pins).
 
 ## Edge (`upstream-head`)
