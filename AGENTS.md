@@ -39,6 +39,12 @@ When Lumabri `main` moves and `native/lumabri-gateway-main.patch` fails to apply
 - Pin-only drift is refreshed by `.github/workflows/upstream-pin-refresh.yml`.
   Autofix launches only when a Lumabri or QVAC canary job fails.
 
+## Dependency updates
+
+- Dependabot groups production npm bumps, TypeScript tooling bumps, transitive npm bumps, and GitHub Actions bumps into separate pull requests.
+- Do not accept a Dependabot bump of `@qvac/sdk`, `@qvac/cli`, or a routine Zod bump. Those versions come from `contracts.json`. A Zod security pull request must change `runtime.zod.tested` in the same change.
+- Keep TypeScript on 5.9.x and `@types/node` on 20.x. Majors are outside this release's Node range.
+
 ## Upstream autofix workflows
 
 - Do not change `CURSOR_API_KEY` values or billing settings in the repo.
