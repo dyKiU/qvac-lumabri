@@ -181,7 +181,8 @@ jobs:
           Workflow run: ${RUN_URL}
 
           Fix upstream compatibility for this repository:
-          - Refresh candidate pins in contracts.json when Lumabri, Colibri, or QVAC releases moved.
+          - When Candidate release freshness fails, set dev-next qvac.sdk, qvac.cli, sdkGitHead, and cliGitHead from npm latest @qvac/sdk and @qvac/cli, and set qvac.sourceRef to the SDK gitHead. The QVAC canary already builds that SDK commit.
+          - Refresh Lumabri and Colibri candidate pins in contracts.json when those releases or heads moved.
           - Rebase native/lumabri-gateway-main.patch if Lumabri main changed.
           - Keep README contract markers in sync (npm run docs:contracts).
           - Follow AGENTS.md: minimal scope, run npm run check and npm run check:hygiene before opening a PR.

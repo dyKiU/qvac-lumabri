@@ -78,20 +78,22 @@ Use `model` plus `tracker` instead of `localDir` for a Lumabri swarm model.
 |---|---|---|---|---|---|---|
 | stable-0.1 | supported | 0.1.x | 0.17.1 / 0.11.0 | v1 | `post-v0.8.0 @ d493fb2` | `v1.4.0 @ b085b48` |
 | stable-0.1-r2 | supported | 0.1.x | 0.18.1 / 0.12.0 | v1 | `post-v0.8.0 @ d493fb2` | `v1.7.0 @ 259858f` |
-| dev-next | candidate | main | 0.21.0 / 0.15.0 | v1 | `post-v0.8.0 @ 941a2d0` | `v2.0.0 @ bf24429` |
+| dev-next | candidate | main | 0.22.0 / 0.16.0 | v1 | `post-v0.8.0 @ 941a2d0` | `v2.0.0 @ bf24429` |
 | upstream-head | edge | main | main / main | v1 | `main` | `main` |
 <!-- contracts:end -->
 
 [`contracts.json`](contracts.json) is the source of truth. Supported contracts
-gate releases; pinned candidates and upstream heads run as weekly canaries.
+gate releases. The daily Upstream compatibility canary builds `dev-next` and
+`upstream-head`, and `check:freshness` compares the `dev-next` QVAC pins with
+npm `latest`.
 Node.js is `>=20 <23`; Zod is `>=4.4.3 <5.0.0`.
 
 See [QVAC contract lines](docs/qvac-contract-lines.md) for **supported vs
 candidate** behavior. In short: **`peerDependencies` match supported SDKs only**
-(`0.17.1 || 0.18.1`). The **`dev-next`** row (for example QVAC `0.21.x`) is
-validated in **Upstream compatibility** CI with packed SDK builds — installing
-`@qvac/sdk@latest` from npm does **not** by itself mean you are on the candidate
-line.
+(`0.17.1 || 0.18.1`). The **`dev-next`** QVAC SDK/CLI row tracks npm `latest`.
+Upstream compatibility packs that SDK commit and fails freshness until
+`contracts.json` records it. Installing `@qvac/sdk@latest` in an application
+does **not** select this package's supported line.
 
 ## Capabilities in adapter 0.1.x
 
@@ -137,8 +139,8 @@ npm run test:qvac      # QVAC -> adapter -> fake gateway
 ```
 
 CI also builds both Lumabri MoE sides against pinned Colibri sources. A daily
-canary detects Lumabri and Colibri head or release drift, then qualifies both
-the candidate pins and upstream `main` branches. QVAC source contracts run as
-a separate canary matrix.
+canary detects Lumabri and Colibri head or release drift, checks that the
+`dev-next` QVAC SDK and CLI match npm `latest`, and builds that SDK commit
+plus upstream `main`.
 
 Apache-2.0.
