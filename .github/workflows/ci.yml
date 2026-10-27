@@ -187,5 +187,16 @@ jobs:
       - name: Install source-built SDK
         working-directory: adapter
         run: npm install --no-save "$RUNNER_TEMP"/qvac-sdk-*.tgz
+      - name: Install contract-pinned Bare runtime
+        working-directory: adapter
+        run: |
+          spec=$(node -p "require('./contracts.json').runtime.bare")
+          npm install --no-save "$spec"
+          installed=$(node -p "JSON.parse(require('fs').readFileSync('node_modules/bare-runtime/package.json','utf8')).version")
+          expected=${spec#bare-runtime@}
+          if [ "$installed" != "$expected" ]; then
+            echo "installed bare-runtime ${installed}, contract pins ${expected}"
+            exit 1
+          fi
       - run: npm run bundle && npm run verify:bundle && npm run test:qvac
         working-directory: adapter
