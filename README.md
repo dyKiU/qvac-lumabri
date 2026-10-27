@@ -86,7 +86,9 @@ Use `model` plus `tracker` instead of `localDir` for a Lumabri swarm model.
 gate releases. The daily Upstream compatibility canary builds `dev-next` and
 `upstream-head`, and `check:freshness` compares the `dev-next` QVAC pins with
 npm `latest`.
-Node.js is `>=20 <23`; Zod is `>=4.4.3 <5.0.0`.
+<!-- runtime:start -->
+Node.js is `>=20 <23`; Zod is `>=4.4.3 <5.0.0`. Source-built QVAC workers use Bare runtime `bare-runtime@1.34.1`.
+<!-- runtime:end -->
 
 See [QVAC contract lines](docs/qvac-contract-lines.md) for **supported vs
 candidate** behavior. In short: **`peerDependencies` match supported SDKs only**

@@ -20,6 +20,7 @@ interface ContractMatrix {
     node: { range: string; tested: string[] }
     zod: { range: string; tested: string }
     numpy: string
+    bare: string
   }
   repositories: {
     lumabri: string
@@ -75,6 +76,7 @@ const [pkg, matrix, qvacConfig, readme] = await Promise.all([
 
 const shaPattern = /^[0-9a-f]{40}$/
 const exactVersionPattern = /^\d+\.\d+\.\d+$/
+const bareRuntimePattern = /^bare-runtime@\d+\.\d+\.\d+$/
 const allowedStatuses = new Set(['supported', 'candidate', 'edge'])
 const requiredProof = new Set(['unit', 'bundle', 'gateway', 'native-build', 'token-identity'])
 const nativeCapabilityFields = [
@@ -105,6 +107,8 @@ assert.deepEqual(matrix.runtime.node.tested, ['20', '22'])
 assert.equal(pkg.peerDependencies.zod, matrix.runtime.zod.range)
 assert.equal(pkg.devDependencies.zod, matrix.runtime.zod.tested)
 assert.match(matrix.runtime.numpy, exactVersionPattern)
+assert.match(matrix.runtime.bare, bareRuntimePattern, 'runtime.bare must be an exact bare-runtime pin')
+assert(readme.includes(matrix.runtime.bare), 'README must document the pinned Bare runtime')
 assert(qvacConfig.plugins.includes('@lumabri/qvac-adapter/plugin'))
 
 const ids = new Set<string>()

@@ -12,6 +12,9 @@ lines are what this npm release targets.
   (`stable-0.1-r2` devDependencies).
 - Lumabri/Colibri pins are exact git SHAs; gateway patch is
   `native/lumabri-gateway.patch`.
+- Pinned QVAC source builds install `runtime.bare` from `contracts.json`.
+  Supported SDK commits accept `bare-runtime` `^1.24.2`; `dev-next` already
+  declares `^1.34.1`.
 
 ## Candidate (`dev-next`)
 
