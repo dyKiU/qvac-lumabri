@@ -8,7 +8,10 @@
   "runtime": {
     "node": {
       "range": ">=20 <23",
-      "tested": ["20", "22"]
+      "tested": [
+        "20",
+        "22"
+      ]
     },
     "zod": {
       "range": ">=4.4.3 <5.0.0",
@@ -19,7 +22,9 @@
   },
   "gateway": {
     "preferred": 1,
-    "supported": [1]
+    "supported": [
+      1
+    ]
   },
   "contracts": [
     {
@@ -121,7 +126,7 @@
       "lumabri": {
         "releaseBase": "v0.8.0",
         "baseline": "post-v0.8.0",
-        "sourceRef": "a0b0463abd9f7a22ea0e3c001f96ba1ffe8d653f",
+        "sourceRef": "6c658d37a5a762893c276fc12f2575d55126b404",
         "gatewayPatch": "native/lumabri-gateway-main.patch"
       },
       "colibri": {
