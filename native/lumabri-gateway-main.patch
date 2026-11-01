@@ -786,7 +786,7 @@ index 36958d1..2c80875 100644
      return 2;
  }
 diff --git a/tools/prepare_v41_range.py b/tools/prepare_v41_range.py
-index 19eb9e6..092e799 100644
+index 19eb9e6..906ca3c 100644
 --- a/tools/prepare_v41_range.py
 +++ b/tools/prepare_v41_range.py
 @@ -20,8 +20,10 @@ def replace_once(text, before, after):
@@ -795,14 +795,65 @@ index 19eb9e6..092e799 100644
      # functions in a future release. Deliberate revalidation is required.
 -    if hashlib.sha256(text.encode()).hexdigest() != '29957921abf6febf6c409b3aac22319065acddc6f9e303df1b4e02b30d10b141':
 -        raise ValueError('V4.1 range engine requires pinned Colibri 1.12.1')
-+    # Colibri v2.0.0 (bf244291) kept the audited sites; the forward loop now
-+    # starts at `chained` so a Vulkan prefix is not run again on the CPU.
-+    if hashlib.sha256(text.encode()).hexdigest() != 'f34241f5c1094468e61a0428fbdf189799881c0f1dae4b55a60b7548c01733e0':
-+        raise ValueError('V4.1 range engine requires pinned Colibri v2.0.0')
++    # Colibri v2.1.0 kept the audited sites; the forward loop still starts at
++    # `chained` so a Vulkan prefix is not run again on the CPU.
++    if hashlib.sha256(text.encode()).hexdigest() != '3dbc511047cc0fd40b09d8476d00bf6cdbef08f54ebd70cf4d10b24e10c833ff':
++        raise ValueError('V4.1 range engine requires pinned Colibri v2.1.0')
      text = replace_once(text, '    int fd_w, fd_s;\n    int64_t off_w, off_s, rows;',
                          '    int fd_w, fd_s;\n    uint8_t *resident_w, *resident_s;\n    int64_t off_w, off_s, rows;')
      text = replace_once(text, '    t->rows = w->nbytes / head_dim;', '''    t->rows = w->nbytes / head_dim;
-@@ -79,8 +81,8 @@ def prepare(text):
+@@ -31,17 +33,17 @@ def prepare(text):
+     t->resident_s = xmalloc((size_t)s->nbytes, "resident Engram scales");
+     st_pread_full(t->fd_w, t->resident_w, w->nbytes, t->off_w, "prepare Engram weights");
+     st_pread_full(t->fd_s, t->resident_s, s->nbytes, t->off_s, "prepare Engram scales");''')
+-    text = replace_once(text, '''        st_pread_full(t->fd_w, bytes, head_dim, t->off_w + id * head_dim, "engram row");
+-        st_pread_full(t->fd_s, scales, groups, t->off_s + id * groups, "engram scale");''', '''        if (id < 0 || id >= t->rows || !t->resident_w || !t->resident_s) exit(1);
+-        memcpy(bytes, t->resident_w + (size_t)id * head_dim, (size_t)head_dim);
+-        memcpy(scales, t->resident_s + (size_t)id * groups, (size_t)groups);''')
++    text = replace_once(text, '''            st_pread_full(t->fd_w, bytes, head_dim, t->off_w + id * head_dim, "engram row");
++            st_pread_full(t->fd_s, scales, groups, t->off_s + id * groups, "engram scale");''', '''            if (id < 0 || id >= t->rows || !t->resident_w || !t->resident_s) exit(1);
++            memcpy(bytes, t->resident_w + (size_t)id * head_dim, (size_t)head_dim);
++            memcpy(scales, t->resident_s + (size_t)id * groups, (size_t)groups);''')
+     text = replace_once(text, "    Cfg c;\n    shards S;", """    Cfg c;
+     int range_begin, range_end, range_enabled, context_limit;
+     const float *boundary_input, *boundary_mix;
+     float *boundary_output, *boundary_output_mix;
+     shards S;""")
+-    text = replace_once(text, '    cfg_load(c, snap);\n    attn_project_check(c);',
+-                        '    cfg_load(c, snap);\n    if (m->context_limit >= 2 && m->context_limit < c->max_positions) c->max_positions = m->context_limit;\n    attn_project_check(c);')
++    text = replace_once(text, '    cfg_load(c, snap);\n    if (g_v41_dry && c->max_positions > 4 * c->window) c->max_positions = 4 * c->window;   /* nothing runs */\n    attn_project_check(c);',
++                        '    cfg_load(c, snap);\n    if (g_v41_dry && c->max_positions > 4 * c->window) c->max_positions = 4 * c->window;   /* nothing runs */\n    if (m->context_limit >= 2 && m->context_limit < c->max_positions) c->max_positions = m->context_limit;\n    attn_project_check(c);')
+     # No global head/embedding and no unrelated layer weights on a donor.
+     text = replace_once(text, '    wb_load(&m->S, &m->embed, "embed.weight", c->vocab, dim);',
+                         '    if (!m->range_enabled) {\n    wb_load(&m->S, &m->embed, "embed.weight", c->vocab, dim);')
+@@ -51,16 +53,23 @@ def prepare(text):
+                         '    for (int i = 0; i < c->n_layers; i++) {\n        Layer *l = &m->L[i];\n        l->engram_index = -1;\n        if (m->range_enabled && (i < m->range_begin || i >= m->range_end)) continue;')
+     text = replace_once(text, '            m->L[layer].engram_index = t;',
+                         '            if (m->range_enabled && (layer < m->range_begin || layer >= m->range_end)) continue;\n            m->L[layer].engram_index = t;')
+-    text = replace_once(text, '    for (int i = 0; i < c->n_layers; i++) cache_init(m, &m->cache[i], ecap);', """    memset(m->cache, 0, (size_t)c->n_layers * sizeof(LCache));
++    text = replace_once(text, '''    for (int i = 0; i < c->n_layers; i++) {
++        if (g_v41_dry) { memset(&m->cache[i], 0, sizeof(LCache)); continue; }   /* nothing is read */
++        cache_init(m, &m->cache[i], ecap, 0);
++    }''', """    memset(m->cache, 0, (size_t)c->n_layers * sizeof(LCache));
+     for (int i = 0; i < c->n_layers; i++) {
+-        if (!m->range_enabled || (i >= m->range_begin && i < m->range_end))
+-            cache_init(m, &m->cache[i], ecap);
++        if (!m->range_enabled || (i >= m->range_begin && i < m->range_end)) {
++            if (g_v41_dry) { memset(&m->cache[i], 0, sizeof(LCache)); continue; }
++            cache_init(m, &m->cache[i], ecap, 0);
++        }
+         /* Foreign KV owners are STATE replicas, never weight replicas. */
+         else if (c->kv_source[i]) {
+             int ratio = c->compress_ratio[i] > 0 ? c->compress_ratio[i] : 1;
+             m->L[i].ckv = calloc((size_t)c->max_positions / ratio * hd, sizeof(float));
+             m->L[i].ikey = calloc((size_t)c->max_positions / ratio * c->index_head_dim, sizeof(float));
+             if (!m->L[i].ckv || !m->L[i].ikey) exit(1);
++        } else if (g_v41_dry) {
++            memset(&m->cache[i], 0, sizeof(LCache));
+         }
+     }""")
+     text = replace_once(text, '    spec_load(m, ecap);', '    /* Text, non-speculative range oracle: DSpark is a separate contract. */')
+@@ -79,14 +88,14 @@ def prepare(text):
      f = replace_once(f, '    /* V41_TRACE=2', '''    if (m->boundary_mix) memcpy(pre_mix, m->boundary_mix, (size_t)n * hc * sizeof(float));
  
      /* V41_TRACE=2''')
@@ -813,3 +864,10 @@ index 19eb9e6..092e799 100644
      f = replace_once(f, "    /* the last block's FFN mix collapses the stream one final time */", """    if (m->boundary_output) {
          memcpy(m->boundary_output, h, (size_t)n * hc * dim * sizeof(float));
          memcpy(m->boundary_output_mix, pre_mix, (size_t)n * hc * sizeof(float));
+     } else {
+     /* the last block's FFN mix collapses the stream one final time */""")
+-    f = replace_once(f, '    m->pos += n;', '    }\n    m->pos += n;')
++    f = replace_once(f, '    m->pos += n_all;', '    }\n    m->pos += n_all;')
+     return text[:at] + f + text[end:]
+ 
+ 
