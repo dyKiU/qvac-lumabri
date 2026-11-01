@@ -111,6 +111,89 @@ index 90da14c..5bed94e 100755
      /* Do not call expert_get: a reference must NEVER fetch a missing weight.
       * The model's existing cache lock protects the resident slot lifetime. */
      pthread_mutex_lock(&g_pilot_mx);
+diff --git a/gateway_test.sh b/gateway_test.sh
+new file mode 100755
+index 0000000..2371859
+--- /dev/null
++++ b/gateway_test.sh
+@@ -0,0 +1,77 @@
++#!/usr/bin/env bash
++# Machine gateway contract without a real model: both engine dialects,
++# streamed binary-safe deltas, reset-before-generate, stats, and rejection of
++# prompts that would break the engines' one-line protocol.
++set -euo pipefail
++cd "$(dirname "$0")"
++
++make -s lumabri
++T=$(mktemp -d "${TMPDIR:-.}/lumabri-gateway.XXXXXX")
++cleanup() { perl -MFile::Path=remove_tree -e 'remove_tree($ARGV[0])' "$T"; }
++trap cleanup EXIT
++mkdir -p "$T/model"
++printf '{"model_type":"glm"}' > "$T/model/config.json"
++export GATEWAY_TEST_NOFILE="$T/nofile"
++
++cat > "$T/framed" <<'EOF'
++#!/usr/bin/env bash
++ulimit -S -n > "${GATEWAY_TEST_NOFILE:?}"
++printf '\x01\x01READY\x01\x01\nSTAT 0 0.0 0.0 0.0\n'
++while IFS= read -r line; do
++    if [ "$line" = $'\x02RESET' ]; then
++        printf '\x01\x01END\x01\x01\nSTAT 0 0.0 0.0 0.0\n'
++        continue
++    fi
++    printf 'framed: %s 🦜' "$line"
++    printf '\n\x01\x01END\x01\x01\nSTAT 7 4.25 91.5 2.75\n'
++done
++EOF
++chmod +x "$T/framed"
++
++cat > "$T/line" <<'EOF'
++#!/usr/bin/env bash
++printf 'ready\n> '
++while IFS= read -r line; do
++    [ "$line" = /reset ] && continue
++    printf 'line: %s 🦜\n> ' "$line"
++done
++EOF
++chmod +x "$T/line"
++
++run_case() {
++    local engine=$1 expected=$2 output=$3
++    (
++        ulimit -S -n 64
++        {
++            printf '%s\n' '{"v":1,"id":"one","op":"generate","prompt":"aGVsbG8gd29ybGQ="}'
++            printf '%s\n' '{"v":1,"id":"bad","op":"generate","prompt":"YmFkCnByb21wdA=="}'
++            printf '%s\n' '{"v":1,"id":"stop","op":"shutdown"}'
++        } | ./lumabri gateway --local "$T/model" --engine "$engine" > "$output"
++    )
++
++    python3 - "$output" "$expected" <<'PY'
++import base64, json, sys
++
++records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
++assert records[0]["type"] == "ready", records
++deltas = [r for r in records if r.get("id") == "one" and r.get("type") == "delta"]
++text = b"".join(base64.b64decode(r["data"], validate=True) for r in deltas).decode()
++assert text.rstrip("\n") == sys.argv[2], (text, records)
++done = next(r for r in records if r.get("id") == "one" and r.get("type") == "done")
++if records[0]["protocol"] == "framed":
++    assert done["stats"]["generatedTokens"] == 7, done
++    assert done["stats"]["tokensPerSecond"] == 4.25, done
++bad = next(r for r in records if r.get("id") == "bad")
++assert bad["type"] == "error" and "one engine-protocol line" in bad["message"], bad
++assert records[-1]["type"] == "bye", records[-1]
++PY
++}
++
++echo "· framed gateway"
++run_case "$T/framed" "framed: hello world 🦜" "$T/framed.out"
++test "$(cat "$GATEWAY_TEST_NOFILE")" -gt 64
++echo "  ✓ streamed delta, stats, isolation, validation"
++
++echo "· line gateway"
++run_case "$T/line" "line: hello world 🦜" "$T/line.out"
++echo "  ✓ prompt dialect and reset-before-generate"
 diff --git a/lumabri.c b/lumabri.c
 index 36958d1..2c80875 100644
 --- a/lumabri.c
