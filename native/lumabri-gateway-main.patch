@@ -1,8 +1,8 @@
 diff --git a/engine_patches/deepseek_v4_p2p.py b/engine_patches/deepseek_v4_p2p.py
-index e889dda..479386f 100644
+index e889dda..d7b3a7d 100644
 --- a/engine_patches/deepseek_v4_p2p.py
 +++ b/engine_patches/deepseek_v4_p2p.py
-@@ -73,26 +73,14 @@ def main():
+@@ -73,26 +73,16 @@ def main():
           '        }\n'
           '    }\n'
           '#endif\n'),
@@ -23,24 +23,28 @@ index e889dda..479386f 100644
 -        # property of one allocator, not of the code. Ask for one element when
 -        # there is nothing to select — the loop below is skipped either way.
 +        # site 2b — moe_token_pipeline: add the remote partial, then the
-+        # views array. Colibri v2.0.0 already allocates one element when
-+        # selected is 0, so a delegated layer cannot turn malloc(0) into a
-+        # failed forward. Leave that allocation unchanged.
++        # views array. Colibri v2.1.0 zeroes views with calloc and still
++        # allocates one element when selected is 0. Leave that allocation
++        # unchanged.
          ('    if (!result) memset(output, 0, (size_t)d * sizeof(*output));\n'
           '\n'
           '#ifdef COLI_V4_EXPERIMENTAL_DUAL_EXPERT_LOADER\n'
 -         '    ColiExpertView *views = malloc((size_t)selected * sizeof(*views));',
-+         '    ColiExpertView *views = malloc((size_t)(selected ? selected : 1) * sizeof(*views));',
++         '    /* Zeroed up front: every exit releases the views below, and one that\n'
++         '     * fails before the fetch pass fills them must find no lease there. */\n'
++         '    ColiExpertView *views = calloc((size_t)(selected ? selected : 1), sizeof(*views));',
           '    if (!result) memset(output, 0, (size_t)d * sizeof(*output));\n'
           '#ifdef LUMABRI_P2P\n'
           '    if (!result && lumi_partial) {\n'
-@@ -102,8 +90,7 @@ def main():
+@@ -102,8 +92,9 @@ def main():
           '#endif\n'
           '\n'
           '#ifdef COLI_V4_EXPERIMENTAL_DUAL_EXPERT_LOADER\n'
 -         '    ColiExpertView *views =\n'
 -         '        malloc((size_t)(selected > 0 ? selected : 1) * sizeof(*views));'),
-+         '    ColiExpertView *views = malloc((size_t)(selected ? selected : 1) * sizeof(*views));'),
++         '    /* Zeroed up front: every exit releases the views below, and one that\n'
++         '     * fails before the fetch pass fills them must find no lease there. */\n'
++         '    ColiExpertView *views = calloc((size_t)(selected ? selected : 1), sizeof(*views));'),
          # site 3 — v4_moe_batch_union: batch, reset n
          ('    if (!result)\n'
           '        memset(outputs, 0, (size_t)batch * d * sizeof(*outputs));\n'
@@ -107,91 +111,8 @@ index 90da14c..5bed94e 100755
      /* Do not call expert_get: a reference must NEVER fetch a missing weight.
       * The model's existing cache lock protects the resident slot lifetime. */
      pthread_mutex_lock(&g_pilot_mx);
-diff --git a/gateway_test.sh b/gateway_test.sh
-new file mode 100755
-index 0000000..2371859
---- /dev/null
-+++ b/gateway_test.sh
-@@ -0,0 +1,77 @@
-+#!/usr/bin/env bash
-+# Machine gateway contract without a real model: both engine dialects,
-+# streamed binary-safe deltas, reset-before-generate, stats, and rejection of
-+# prompts that would break the engines' one-line protocol.
-+set -euo pipefail
-+cd "$(dirname "$0")"
-+
-+make -s lumabri
-+T=$(mktemp -d "${TMPDIR:-.}/lumabri-gateway.XXXXXX")
-+cleanup() { perl -MFile::Path=remove_tree -e 'remove_tree($ARGV[0])' "$T"; }
-+trap cleanup EXIT
-+mkdir -p "$T/model"
-+printf '{"model_type":"glm"}' > "$T/model/config.json"
-+export GATEWAY_TEST_NOFILE="$T/nofile"
-+
-+cat > "$T/framed" <<'EOF'
-+#!/usr/bin/env bash
-+ulimit -S -n > "${GATEWAY_TEST_NOFILE:?}"
-+printf '\x01\x01READY\x01\x01\nSTAT 0 0.0 0.0 0.0\n'
-+while IFS= read -r line; do
-+    if [ "$line" = $'\x02RESET' ]; then
-+        printf '\x01\x01END\x01\x01\nSTAT 0 0.0 0.0 0.0\n'
-+        continue
-+    fi
-+    printf 'framed: %s 🦜' "$line"
-+    printf '\n\x01\x01END\x01\x01\nSTAT 7 4.25 91.5 2.75\n'
-+done
-+EOF
-+chmod +x "$T/framed"
-+
-+cat > "$T/line" <<'EOF'
-+#!/usr/bin/env bash
-+printf 'ready\n> '
-+while IFS= read -r line; do
-+    [ "$line" = /reset ] && continue
-+    printf 'line: %s 🦜\n> ' "$line"
-+done
-+EOF
-+chmod +x "$T/line"
-+
-+run_case() {
-+    local engine=$1 expected=$2 output=$3
-+    (
-+        ulimit -S -n 64
-+        {
-+            printf '%s\n' '{"v":1,"id":"one","op":"generate","prompt":"aGVsbG8gd29ybGQ="}'
-+            printf '%s\n' '{"v":1,"id":"bad","op":"generate","prompt":"YmFkCnByb21wdA=="}'
-+            printf '%s\n' '{"v":1,"id":"stop","op":"shutdown"}'
-+        } | ./lumabri gateway --local "$T/model" --engine "$engine" > "$output"
-+    )
-+
-+    python3 - "$output" "$expected" <<'PY'
-+import base64, json, sys
-+
-+records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-+assert records[0]["type"] == "ready", records
-+deltas = [r for r in records if r.get("id") == "one" and r.get("type") == "delta"]
-+text = b"".join(base64.b64decode(r["data"], validate=True) for r in deltas).decode()
-+assert text.rstrip("\n") == sys.argv[2], (text, records)
-+done = next(r for r in records if r.get("id") == "one" and r.get("type") == "done")
-+if records[0]["protocol"] == "framed":
-+    assert done["stats"]["generatedTokens"] == 7, done
-+    assert done["stats"]["tokensPerSecond"] == 4.25, done
-+bad = next(r for r in records if r.get("id") == "bad")
-+assert bad["type"] == "error" and "one engine-protocol line" in bad["message"], bad
-+assert records[-1]["type"] == "bye", records[-1]
-+PY
-+}
-+
-+echo "· framed gateway"
-+run_case "$T/framed" "framed: hello world 🦜" "$T/framed.out"
-+test "$(cat "$GATEWAY_TEST_NOFILE")" -gt 64
-+echo "  ✓ streamed delta, stats, isolation, validation"
-+
-+echo "· line gateway"
-+run_case "$T/line" "line: hello world 🦜" "$T/line.out"
-+echo "  ✓ prompt dialect and reset-before-generate"
 diff --git a/lumabri.c b/lumabri.c
-index 796fb6c..705c4a6 100644
+index 36958d1..2c80875 100644
 --- a/lumabri.c
 +++ b/lumabri.c
 @@ -3,6 +3,7 @@
@@ -202,7 +123,7 @@ index 796fb6c..705c4a6 100644
   *
   * `serve` runs the tracker and a maintainer for the given directory.
   * `chat` asks the tracker what is available, mounts the chosen model through
-@@ -33,6 +34,7 @@
+@@ -36,6 +37,7 @@
  #include "lumabri_home_net.h"
  #include <arpa/inet.h>
  #include <dirent.h>
@@ -210,7 +131,7 @@ index 796fb6c..705c4a6 100644
  #include <fcntl.h>
  #include <ifaddrs.h>
  #include <math.h>
-@@ -45,6 +47,7 @@
+@@ -48,6 +50,7 @@
  #include <stdarg.h>
  #include <stdint.h>
  #include <sys/ioctl.h>
@@ -218,7 +139,7 @@ index 796fb6c..705c4a6 100644
  #include <sys/stat.h>
  #include <sys/statvfs.h>
  #include <sys/wait.h>
-@@ -52,6 +55,12 @@
+@@ -55,6 +58,12 @@
  #include <time.h>
  #include <unistd.h>
  
@@ -231,7 +152,7 @@ index 796fb6c..705c4a6 100644
  #include "lumabri_proto.h"
  #include "lumabri_run_gate.h"
  #include "src/runtime/lumabri_session_limits.h"
-@@ -2545,9 +2554,6 @@ static int engine_wait_ready(Engine *e) {
+@@ -2551,9 +2560,6 @@ static int engine_wait_ready(Engine *e) {
      }
  }
  
@@ -241,7 +162,7 @@ index 796fb6c..705c4a6 100644
  /* Some engines (DeepSeek V4) print a dashboard on stdout between the reply text:
   * whole lines like `EMAP 43 256 <hex>`, `TIERS 0 …`, `HITS …`, `HWINFO …`,
   * `PROF …`. They are diagnostics, not generated tokens, and they used to land
-@@ -2559,15 +2565,29 @@ static int engine_wait_ready(Engine *e) {
+@@ -2565,15 +2571,29 @@ static int engine_wait_ready(Engine *e) {
  typedef struct { int mode; char pfx[8]; int pfxn; } TelFilter;
  enum { TF_LINESTART = 0, TF_MID, TF_DROP };
  
@@ -274,7 +195,7 @@ index 796fb6c..705c4a6 100644
              t->pfxn = 0; continue;
          }
          if (t->pfxn < (int)sizeof t->pfx) t->pfx[t->pfxn++] = c;
-@@ -2583,21 +2603,27 @@ static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
+@@ -2589,21 +2609,27 @@ static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
          }
          if (is_tel) { t->pfxn = 0; t->mode = TF_DROP; }
          else if (!maybe || t->pfxn == (int)sizeof t->pfx) {   /* ruled out: it is text */
@@ -306,7 +227,7 @@ index 796fb6c..705c4a6 100644
      const char *S = FRAME_END;
      size_t SL = strlen(S), cap = 8192, len = 0, shown = 0;
      char *buf = malloc(cap), *hit = NULL;
-@@ -2619,12 +2645,15 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -2625,12 +2651,15 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
          /* hold back SL-1 bytes: a sentinel may straddle two reads */
          size_t safe = hit ? (size_t)(hit - buf) : (len > SL ? len - SL : 0);
          if (safe > shown) {
@@ -324,7 +245,7 @@ index 796fb6c..705c4a6 100644
      size_t after = (size_t)(hit - buf) + SL;
      char rest[256];
      size_t rl = len > after ? len - after : 0;
-@@ -2648,6 +2677,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -2654,6 +2683,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
  
  /* ---- serve codec client: UI is only a consumer of the shared reader ------ */
  #include "src/runtime/lumabri_reply_stream.h"
@@ -336,7 +257,7 @@ index 796fb6c..705c4a6 100644
  /* A growable capture of the assistant's reply, to feed back as history. */
  typedef struct { char *p; size_t len, cap; } Cap;
  static int cap_add(Cap *c, const char *d, size_t n) {
-@@ -5285,6 +5319,427 @@ static int cmd_chat(int argc, char **argv) {
+@@ -4935,6 +4969,427 @@ static int cmd_chat(int argc, char **argv) {
      return chat_failed;
  }
  
@@ -764,7 +685,7 @@ index 796fb6c..705c4a6 100644
  /* ---- key: the operator's identity ---------------------------------------
   * Ed25519 keypair. The secret signs the swarm's ground truth and belongs
   * only on the machine that owns the model — ideally offline, since the
-@@ -6510,6 +6965,8 @@ int main(int argc, char **argv) {
+@@ -6205,6 +6660,8 @@ int main(int argc, char **argv) {
      if (argc >= 2 && !strcmp(argv[1], "serve")) return cmd_serve(argc - 2, argv + 2);
      if (argc == 2 && !strcmp(argv[1], "chat") && g_tty && isatty(0)) return cmd_home();
      if (argc >= 2 && !strcmp(argv[1], "chat")) return cmd_chat(argc - 2, argv + 2);
@@ -773,7 +694,7 @@ index 796fb6c..705c4a6 100644
      /* Interactive entry points share one workspace. Explicit flags remain
       * available to scripts without inheriting an implicit sharing role. */
      if (argc == 1 && g_tty) return cmd_home();
-@@ -6526,6 +6983,7 @@ int main(int argc, char **argv) {
+@@ -6224,6 +6681,7 @@ int main(int argc, char **argv) {
          "  lumabri peer-key                                           print this machine's endpoint identity\n"
          "  lumabri serve --model DIR [--port 7300] [--join TRACKER]   share a model\n"
          "  lumabri chat  [--tracker HOST:7300] [--model NAME]         chat with it\n"
