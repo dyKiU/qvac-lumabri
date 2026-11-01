@@ -1,8 +1,8 @@
 diff --git a/engine_patches/deepseek_v4_p2p.py b/engine_patches/deepseek_v4_p2p.py
-index e889dda..479386f 100644
+index e889dda..d7b3a7d 100644
 --- a/engine_patches/deepseek_v4_p2p.py
 +++ b/engine_patches/deepseek_v4_p2p.py
-@@ -73,26 +73,14 @@ def main():
+@@ -73,26 +73,16 @@ def main():
           '        }\n'
           '    }\n'
           '#endif\n'),
@@ -23,24 +23,28 @@ index e889dda..479386f 100644
 -        # property of one allocator, not of the code. Ask for one element when
 -        # there is nothing to select — the loop below is skipped either way.
 +        # site 2b — moe_token_pipeline: add the remote partial, then the
-+        # views array. Colibri v2.0.0 already allocates one element when
-+        # selected is 0, so a delegated layer cannot turn malloc(0) into a
-+        # failed forward. Leave that allocation unchanged.
++        # views array. Colibri v2.1.0 zeroes views with calloc and still
++        # allocates one element when selected is 0. Leave that allocation
++        # unchanged.
          ('    if (!result) memset(output, 0, (size_t)d * sizeof(*output));\n'
           '\n'
           '#ifdef COLI_V4_EXPERIMENTAL_DUAL_EXPERT_LOADER\n'
 -         '    ColiExpertView *views = malloc((size_t)selected * sizeof(*views));',
-+         '    ColiExpertView *views = malloc((size_t)(selected ? selected : 1) * sizeof(*views));',
++         '    /* Zeroed up front: every exit releases the views below, and one that\n'
++         '     * fails before the fetch pass fills them must find no lease there. */\n'
++         '    ColiExpertView *views = calloc((size_t)(selected ? selected : 1), sizeof(*views));',
           '    if (!result) memset(output, 0, (size_t)d * sizeof(*output));\n'
           '#ifdef LUMABRI_P2P\n'
           '    if (!result && lumi_partial) {\n'
-@@ -102,8 +90,7 @@ def main():
+@@ -102,8 +92,9 @@ def main():
           '#endif\n'
           '\n'
           '#ifdef COLI_V4_EXPERIMENTAL_DUAL_EXPERT_LOADER\n'
 -         '    ColiExpertView *views =\n'
 -         '        malloc((size_t)(selected > 0 ? selected : 1) * sizeof(*views));'),
-+         '    ColiExpertView *views = malloc((size_t)(selected ? selected : 1) * sizeof(*views));'),
++         '    /* Zeroed up front: every exit releases the views below, and one that\n'
++         '     * fails before the fetch pass fills them must find no lease there. */\n'
++         '    ColiExpertView *views = calloc((size_t)(selected ? selected : 1), sizeof(*views));'),
          # site 3 — v4_moe_batch_union: batch, reset n
          ('    if (!result)\n'
           '        memset(outputs, 0, (size_t)batch * d * sizeof(*outputs));\n'
@@ -191,7 +195,7 @@ index 0000000..2371859
 +run_case "$T/line" "line: hello world 🦜" "$T/line.out"
 +echo "  ✓ prompt dialect and reset-before-generate"
 diff --git a/lumabri.c b/lumabri.c
-index 796fb6c..705c4a6 100644
+index 36958d1..2c80875 100644
 --- a/lumabri.c
 +++ b/lumabri.c
 @@ -3,6 +3,7 @@
@@ -202,7 +206,7 @@ index 796fb6c..705c4a6 100644
   *
   * `serve` runs the tracker and a maintainer for the given directory.
   * `chat` asks the tracker what is available, mounts the chosen model through
-@@ -33,6 +34,7 @@
+@@ -36,6 +37,7 @@
  #include "lumabri_home_net.h"
  #include <arpa/inet.h>
  #include <dirent.h>
@@ -210,7 +214,7 @@ index 796fb6c..705c4a6 100644
  #include <fcntl.h>
  #include <ifaddrs.h>
  #include <math.h>
-@@ -45,6 +47,7 @@
+@@ -48,6 +50,7 @@
  #include <stdarg.h>
  #include <stdint.h>
  #include <sys/ioctl.h>
@@ -218,7 +222,7 @@ index 796fb6c..705c4a6 100644
  #include <sys/stat.h>
  #include <sys/statvfs.h>
  #include <sys/wait.h>
-@@ -52,6 +55,12 @@
+@@ -55,6 +58,12 @@
  #include <time.h>
  #include <unistd.h>
  
@@ -231,7 +235,7 @@ index 796fb6c..705c4a6 100644
  #include "lumabri_proto.h"
  #include "lumabri_run_gate.h"
  #include "src/runtime/lumabri_session_limits.h"
-@@ -2545,9 +2554,6 @@ static int engine_wait_ready(Engine *e) {
+@@ -2551,9 +2560,6 @@ static int engine_wait_ready(Engine *e) {
      }
  }
  
@@ -241,7 +245,7 @@ index 796fb6c..705c4a6 100644
  /* Some engines (DeepSeek V4) print a dashboard on stdout between the reply text:
   * whole lines like `EMAP 43 256 <hex>`, `TIERS 0 …`, `HITS …`, `HWINFO …`,
   * `PROF …`. They are diagnostics, not generated tokens, and they used to land
-@@ -2559,15 +2565,29 @@ static int engine_wait_ready(Engine *e) {
+@@ -2565,15 +2571,29 @@ static int engine_wait_ready(Engine *e) {
  typedef struct { int mode; char pfx[8]; int pfxn; } TelFilter;
  enum { TF_LINESTART = 0, TF_MID, TF_DROP };
  
@@ -274,7 +278,7 @@ index 796fb6c..705c4a6 100644
              t->pfxn = 0; continue;
          }
          if (t->pfxn < (int)sizeof t->pfx) t->pfx[t->pfxn++] = c;
-@@ -2583,21 +2603,27 @@ static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
+@@ -2589,21 +2609,27 @@ static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
          }
          if (is_tel) { t->pfxn = 0; t->mode = TF_DROP; }
          else if (!maybe || t->pfxn == (int)sizeof t->pfx) {   /* ruled out: it is text */
@@ -306,7 +310,7 @@ index 796fb6c..705c4a6 100644
      const char *S = FRAME_END;
      size_t SL = strlen(S), cap = 8192, len = 0, shown = 0;
      char *buf = malloc(cap), *hit = NULL;
-@@ -2619,12 +2645,15 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -2625,12 +2651,15 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
          /* hold back SL-1 bytes: a sentinel may straddle two reads */
          size_t safe = hit ? (size_t)(hit - buf) : (len > SL ? len - SL : 0);
          if (safe > shown) {
@@ -324,7 +328,7 @@ index 796fb6c..705c4a6 100644
      size_t after = (size_t)(hit - buf) + SL;
      char rest[256];
      size_t rl = len > after ? len - after : 0;
-@@ -2648,6 +2677,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -2654,6 +2683,11 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
  
  /* ---- serve codec client: UI is only a consumer of the shared reader ------ */
  #include "src/runtime/lumabri_reply_stream.h"
@@ -336,7 +340,7 @@ index 796fb6c..705c4a6 100644
  /* A growable capture of the assistant's reply, to feed back as history. */
  typedef struct { char *p; size_t len, cap; } Cap;
  static int cap_add(Cap *c, const char *d, size_t n) {
-@@ -5285,6 +5319,427 @@ static int cmd_chat(int argc, char **argv) {
+@@ -4935,6 +4969,427 @@ static int cmd_chat(int argc, char **argv) {
      return chat_failed;
  }
  
@@ -764,7 +768,7 @@ index 796fb6c..705c4a6 100644
  /* ---- key: the operator's identity ---------------------------------------
   * Ed25519 keypair. The secret signs the swarm's ground truth and belongs
   * only on the machine that owns the model — ideally offline, since the
-@@ -6510,6 +6965,8 @@ int main(int argc, char **argv) {
+@@ -6205,6 +6660,8 @@ int main(int argc, char **argv) {
      if (argc >= 2 && !strcmp(argv[1], "serve")) return cmd_serve(argc - 2, argv + 2);
      if (argc == 2 && !strcmp(argv[1], "chat") && g_tty && isatty(0)) return cmd_home();
      if (argc >= 2 && !strcmp(argv[1], "chat")) return cmd_chat(argc - 2, argv + 2);
@@ -773,7 +777,7 @@ index 796fb6c..705c4a6 100644
      /* Interactive entry points share one workspace. Explicit flags remain
       * available to scripts without inheriting an implicit sharing role. */
      if (argc == 1 && g_tty) return cmd_home();
-@@ -6526,6 +6983,7 @@ int main(int argc, char **argv) {
+@@ -6224,6 +6681,7 @@ int main(int argc, char **argv) {
          "  lumabri peer-key                                           print this machine's endpoint identity\n"
          "  lumabri serve --model DIR [--port 7300] [--join TRACKER]   share a model\n"
          "  lumabri chat  [--tracker HOST:7300] [--model NAME]         chat with it\n"
@@ -782,7 +786,7 @@ index 796fb6c..705c4a6 100644
      return 2;
  }
 diff --git a/tools/prepare_v41_range.py b/tools/prepare_v41_range.py
-index 19eb9e6..092e799 100644
+index 19eb9e6..906ca3c 100644
 --- a/tools/prepare_v41_range.py
 +++ b/tools/prepare_v41_range.py
 @@ -20,8 +20,10 @@ def replace_once(text, before, after):
@@ -791,14 +795,65 @@ index 19eb9e6..092e799 100644
      # functions in a future release. Deliberate revalidation is required.
 -    if hashlib.sha256(text.encode()).hexdigest() != '29957921abf6febf6c409b3aac22319065acddc6f9e303df1b4e02b30d10b141':
 -        raise ValueError('V4.1 range engine requires pinned Colibri 1.12.1')
-+    # Colibri v2.0.0 (bf244291) kept the audited sites; the forward loop now
-+    # starts at `chained` so a Vulkan prefix is not run again on the CPU.
-+    if hashlib.sha256(text.encode()).hexdigest() != 'f34241f5c1094468e61a0428fbdf189799881c0f1dae4b55a60b7548c01733e0':
-+        raise ValueError('V4.1 range engine requires pinned Colibri v2.0.0')
++    # Colibri v2.1.0 kept the audited sites; the forward loop still starts at
++    # `chained` so a Vulkan prefix is not run again on the CPU.
++    if hashlib.sha256(text.encode()).hexdigest() != '3dbc511047cc0fd40b09d8476d00bf6cdbef08f54ebd70cf4d10b24e10c833ff':
++        raise ValueError('V4.1 range engine requires pinned Colibri v2.1.0')
      text = replace_once(text, '    int fd_w, fd_s;\n    int64_t off_w, off_s, rows;',
                          '    int fd_w, fd_s;\n    uint8_t *resident_w, *resident_s;\n    int64_t off_w, off_s, rows;')
      text = replace_once(text, '    t->rows = w->nbytes / head_dim;', '''    t->rows = w->nbytes / head_dim;
-@@ -79,8 +81,8 @@ def prepare(text):
+@@ -31,17 +33,17 @@ def prepare(text):
+     t->resident_s = xmalloc((size_t)s->nbytes, "resident Engram scales");
+     st_pread_full(t->fd_w, t->resident_w, w->nbytes, t->off_w, "prepare Engram weights");
+     st_pread_full(t->fd_s, t->resident_s, s->nbytes, t->off_s, "prepare Engram scales");''')
+-    text = replace_once(text, '''        st_pread_full(t->fd_w, bytes, head_dim, t->off_w + id * head_dim, "engram row");
+-        st_pread_full(t->fd_s, scales, groups, t->off_s + id * groups, "engram scale");''', '''        if (id < 0 || id >= t->rows || !t->resident_w || !t->resident_s) exit(1);
+-        memcpy(bytes, t->resident_w + (size_t)id * head_dim, (size_t)head_dim);
+-        memcpy(scales, t->resident_s + (size_t)id * groups, (size_t)groups);''')
++    text = replace_once(text, '''            st_pread_full(t->fd_w, bytes, head_dim, t->off_w + id * head_dim, "engram row");
++            st_pread_full(t->fd_s, scales, groups, t->off_s + id * groups, "engram scale");''', '''            if (id < 0 || id >= t->rows || !t->resident_w || !t->resident_s) exit(1);
++            memcpy(bytes, t->resident_w + (size_t)id * head_dim, (size_t)head_dim);
++            memcpy(scales, t->resident_s + (size_t)id * groups, (size_t)groups);''')
+     text = replace_once(text, "    Cfg c;\n    shards S;", """    Cfg c;
+     int range_begin, range_end, range_enabled, context_limit;
+     const float *boundary_input, *boundary_mix;
+     float *boundary_output, *boundary_output_mix;
+     shards S;""")
+-    text = replace_once(text, '    cfg_load(c, snap);\n    attn_project_check(c);',
+-                        '    cfg_load(c, snap);\n    if (m->context_limit >= 2 && m->context_limit < c->max_positions) c->max_positions = m->context_limit;\n    attn_project_check(c);')
++    text = replace_once(text, '    cfg_load(c, snap);\n    if (g_v41_dry && c->max_positions > 4 * c->window) c->max_positions = 4 * c->window;   /* nothing runs */\n    attn_project_check(c);',
++                        '    cfg_load(c, snap);\n    if (g_v41_dry && c->max_positions > 4 * c->window) c->max_positions = 4 * c->window;   /* nothing runs */\n    if (m->context_limit >= 2 && m->context_limit < c->max_positions) c->max_positions = m->context_limit;\n    attn_project_check(c);')
+     # No global head/embedding and no unrelated layer weights on a donor.
+     text = replace_once(text, '    wb_load(&m->S, &m->embed, "embed.weight", c->vocab, dim);',
+                         '    if (!m->range_enabled) {\n    wb_load(&m->S, &m->embed, "embed.weight", c->vocab, dim);')
+@@ -51,16 +53,23 @@ def prepare(text):
+                         '    for (int i = 0; i < c->n_layers; i++) {\n        Layer *l = &m->L[i];\n        l->engram_index = -1;\n        if (m->range_enabled && (i < m->range_begin || i >= m->range_end)) continue;')
+     text = replace_once(text, '            m->L[layer].engram_index = t;',
+                         '            if (m->range_enabled && (layer < m->range_begin || layer >= m->range_end)) continue;\n            m->L[layer].engram_index = t;')
+-    text = replace_once(text, '    for (int i = 0; i < c->n_layers; i++) cache_init(m, &m->cache[i], ecap);', """    memset(m->cache, 0, (size_t)c->n_layers * sizeof(LCache));
++    text = replace_once(text, '''    for (int i = 0; i < c->n_layers; i++) {
++        if (g_v41_dry) { memset(&m->cache[i], 0, sizeof(LCache)); continue; }   /* nothing is read */
++        cache_init(m, &m->cache[i], ecap, 0);
++    }''', """    memset(m->cache, 0, (size_t)c->n_layers * sizeof(LCache));
+     for (int i = 0; i < c->n_layers; i++) {
+-        if (!m->range_enabled || (i >= m->range_begin && i < m->range_end))
+-            cache_init(m, &m->cache[i], ecap);
++        if (!m->range_enabled || (i >= m->range_begin && i < m->range_end)) {
++            if (g_v41_dry) { memset(&m->cache[i], 0, sizeof(LCache)); continue; }
++            cache_init(m, &m->cache[i], ecap, 0);
++        }
+         /* Foreign KV owners are STATE replicas, never weight replicas. */
+         else if (c->kv_source[i]) {
+             int ratio = c->compress_ratio[i] > 0 ? c->compress_ratio[i] : 1;
+             m->L[i].ckv = calloc((size_t)c->max_positions / ratio * hd, sizeof(float));
+             m->L[i].ikey = calloc((size_t)c->max_positions / ratio * c->index_head_dim, sizeof(float));
+             if (!m->L[i].ckv || !m->L[i].ikey) exit(1);
++        } else if (g_v41_dry) {
++            memset(&m->cache[i], 0, sizeof(LCache));
+         }
+     }""")
+     text = replace_once(text, '    spec_load(m, ecap);', '    /* Text, non-speculative range oracle: DSpark is a separate contract. */')
+@@ -79,14 +88,14 @@ def prepare(text):
      f = replace_once(f, '    /* V41_TRACE=2', '''    if (m->boundary_mix) memcpy(pre_mix, m->boundary_mix, (size_t)n * hc * sizeof(float));
  
      /* V41_TRACE=2''')
@@ -809,3 +864,10 @@ index 19eb9e6..092e799 100644
      f = replace_once(f, "    /* the last block's FFN mix collapses the stream one final time */", """    if (m->boundary_output) {
          memcpy(m->boundary_output, h, (size_t)n * hc * dim * sizeof(float));
          memcpy(m->boundary_output_mix, pre_mix, (size_t)n * hc * sizeof(float));
+     } else {
+     /* the last block's FFN mix collapses the stream one final time */""")
+-    f = replace_once(f, '    m->pos += n;', '    }\n    m->pos += n;')
++    f = replace_once(f, '    m->pos += n_all;', '    }\n    m->pos += n_all;')
+     return text[:at] + f + text[end:]
+ 
+ 
