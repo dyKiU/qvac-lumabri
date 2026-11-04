@@ -195,7 +195,7 @@ index 0000000..2371859
 +run_case "$T/line" "line: hello world 🦜" "$T/line.out"
 +echo "  ✓ prompt dialect and reset-before-generate"
 diff --git a/lumabri.c b/lumabri.c
-index 8e27707..a145f2b 100644
+index 8e27707..1ee0cca 100644
 --- a/lumabri.c
 +++ b/lumabri.c
 @@ -3,6 +3,7 @@
@@ -328,7 +328,18 @@ index 8e27707..a145f2b 100644
      size_t after = (size_t)(hit - buf) + SL;
      char rest[256];
      size_t rl = len > after ? len - after : 0;
-@@ -4607,6 +4636,427 @@ static int cmd_chat(int argc, char **argv) {
+@@ -2529,6 +2558,10 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+     }
+ }
+ 
++static int stream_until_end(Engine *e, char *statline, size_t scap) {
++    return stream_until_end_to(e, statline, scap, live_chunk, NULL);
++}
++
+ /* ---- serve codec client: UI is only a consumer of the shared reader ------ */
+ #include "src/runtime/lumabri_reply_stream.h"
+ /* Read a serve-codec reply: DATA frames (the generated text) until DONE. Bare
+@@ -4607,6 +4640,427 @@ static int cmd_chat(int argc, char **argv) {
      return chat_failed;
  }
  
@@ -756,7 +767,7 @@ index 8e27707..a145f2b 100644
  /* ---- key: the operator's identity ---------------------------------------
   * Ed25519 keypair. The secret signs the swarm's ground truth and belongs
   * only on the machine that owns the model — ideally offline, since the
-@@ -5603,6 +6053,8 @@ int main(int argc, char **argv) {
+@@ -5603,6 +6057,8 @@ int main(int argc, char **argv) {
      if (argc >= 2 && !strcmp(argv[1], "serve")) return cmd_serve(argc - 2, argv + 2);
      if (argc == 2 && !strcmp(argv[1], "chat") && g_tty && isatty(0)) return cmd_home();
      if (argc >= 2 && !strcmp(argv[1], "chat")) return cmd_chat(argc - 2, argv + 2);
@@ -765,7 +776,7 @@ index 8e27707..a145f2b 100644
      /* Interactive entry points share one workspace. Explicit flags remain
       * available to scripts without inheriting an implicit sharing role. */
      if (argc == 1 && g_tty) return cmd_home();
-@@ -5622,6 +6074,7 @@ int main(int argc, char **argv) {
+@@ -5622,6 +6078,7 @@ int main(int argc, char **argv) {
          "  lumabri peer-key                                           print this machine's endpoint identity\n"
          "  lumabri serve --model DIR [--port 7300] [--join TRACKER]   share a model\n"
          "  lumabri chat  [--tracker HOST:7300] [--model NAME]         chat with it\n"
