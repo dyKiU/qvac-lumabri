@@ -55,6 +55,9 @@ npm run bundle
 npm run verify:bundle
 ```
 
+`verify:bundle` accepts both the published-worker layout (`qvac/addons.manifest.json`) and
+QVAC `main`'s stowed harness (`qvac/worker/index.bundle`).
+
 Load the adapter as model type `lumabri-moe`:
 
 ```js
