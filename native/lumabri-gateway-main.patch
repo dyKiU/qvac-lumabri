@@ -1,74 +1,22 @@
-diff --git a/engine_patches/deepseek_v4_p2p.py b/engine_patches/deepseek_v4_p2p.py
-index e889dda..d7b3a7d 100644
---- a/engine_patches/deepseek_v4_p2p.py
-+++ b/engine_patches/deepseek_v4_p2p.py
-@@ -73,26 +73,16 @@ def main():
-          '        }\n'
-          '    }\n'
-          '#endif\n'),
--        # site 2b — moe_token_pipeline: dual loader, reset selected.
--        # Current colibri allocates a `views` array (and, under COLI_V4_GPU_TIER,
--        # a batch path) before the per-expert loop, so the anchor is the malloc,
--        # not the loop. selected=0 stays correct on the CPU build we compile:
--        # the GPU batch path is #ifdef'd out, so the only tail that runs is
--        # `output = round(output + shared)` — identical to sites 1 and 3, with
--        # the routed partial already written remotely.
--        #
--        # The same `selected = 0` reaches colibri's own
--        #     ColiExpertView *views = malloc((size_t)selected * sizeof(*views));
--        #     if (!views) result = -1;
--        # and malloc(0) is allowed by the standard to return NULL, which would
--        # turn a correctly delegated layer into a failed forward. glibc happens
--        # to return a non-null pointer, so this never fired here; that is a
--        # property of one allocator, not of the code. Ask for one element when
--        # there is nothing to select — the loop below is skipped either way.
-+        # site 2b — moe_token_pipeline: add the remote partial, then the
-+        # views array. Colibri v2.1.0 zeroes views with calloc and still
-+        # allocates one element when selected is 0. Leave that allocation
-+        # unchanged.
-         ('    if (!result) memset(output, 0, (size_t)d * sizeof(*output));\n'
-          '\n'
-          '#ifdef COLI_V4_EXPERIMENTAL_DUAL_EXPERT_LOADER\n'
--         '    ColiExpertView *views = malloc((size_t)selected * sizeof(*views));',
-+         '    /* Zeroed up front: every exit releases the views below, and one that\n'
-+         '     * fails before the fetch pass fills them must find no lease there. */\n'
-+         '    ColiExpertView *views = calloc((size_t)(selected ? selected : 1), sizeof(*views));',
-          '    if (!result) memset(output, 0, (size_t)d * sizeof(*output));\n'
-          '#ifdef LUMABRI_P2P\n'
-          '    if (!result && lumi_partial) {\n'
-@@ -102,8 +92,9 @@ def main():
-          '#endif\n'
-          '\n'
-          '#ifdef COLI_V4_EXPERIMENTAL_DUAL_EXPERT_LOADER\n'
--         '    ColiExpertView *views =\n'
--         '        malloc((size_t)(selected > 0 ? selected : 1) * sizeof(*views));'),
-+         '    /* Zeroed up front: every exit releases the views below, and one that\n'
-+         '     * fails before the fetch pass fills them must find no lease there. */\n'
-+         '    ColiExpertView *views = calloc((size_t)(selected ? selected : 1), sizeof(*views));'),
-         # site 3 — v4_moe_batch_union: batch, reset n
-         ('    if (!result)\n'
-          '        memset(outputs, 0, (size_t)batch * d * sizeof(*outputs));\n'
 diff --git a/engine_patches/make_patches.py b/engine_patches/make_patches.py
-index 90da14c..5bed94e 100755
+index c209995..0dea0dc 100755
 --- a/engine_patches/make_patches.py
 +++ b/engine_patches/make_patches.py
-@@ -177,7 +177,9 @@ KIMI = [
+@@ -177,6 +177,8 @@ KIMI = [
      }
  #endif
  """),
--    hook("""        experts_apply_union(m,li,nu,uid,pfirst,pcnt,poslist,wlist,z,LT,u,gate,up,hz);
 +    # Colibri v2.0.0 added the Vulkan result buffer (R, rslot). The U-writing
 +    # call passes NULL,NULL; device-backed calls must stay local.
-+    hook("""        experts_apply_union(m,li,nu,uid,pfirst,pcnt,poslist,wlist,z,LT,u,gate,up,hz,NULL,NULL);
+     hook("""        experts_apply_union(m,li,nu,uid,pfirst,pcnt,poslist,wlist,z,LT,u,gate,up,hz,NULL,NULL);
  """, """#ifdef LUMIBRI_P2P
          if(lumi_layer_on(li)){
-             /* the union the engine just built, executed on peers; the router
 @@ -264,10 +266,15 @@ QWEN36 = [
      atexit(lumi_report);
  #endif
  """),
--    hook("        if (use_xf) {\n", """#ifdef LUMIBRI_P2P
--        if (!use_xf && !use_qt && lumi_layer_on(layer) &&
+-    hook("        if (use_qq) {\n", """#ifdef LUMIBRI_P2P
+-        if (!use_xf && !use_qt && !use_qq && !use_vk && !use_gq && !l->post_en && lumi_layer_on(layer) &&
 -            lumi_moe_apply(layer, idx, val, K, xs, D, out + (int64_t)s*D)) {
 -        } else
 +    # Colibri v2.0.0 folded the planar runner into `else if (use_xf || use_vk)`.
@@ -83,18 +31,16 @@ index 90da14c..5bed94e 100755
  #endif
  """, where="before"),
  ]
-@@ -307,7 +314,9 @@ def olmoe_local_callback(src):
+@@ -307,6 +314,8 @@ def olmoe_local_callback(src):
      """
      start = "            Slot *e; expert_get(m, layer, idx[kk], &e);\n"
      stop = "            float w = val[kk];\n"
--    anchor = "static void moe(Model *m, Layer *l, int layer, float *x, int S, float *out) {"
 +    # Colibri v2.0.0 moved the decode row into moe_routed, ahead of moe().
 +    # The helpers have to be defined before that call.
-+    anchor = "static void moe_routed(Model *m, int layer, float *x, int S, float *logits, float *out) {"
+     anchor = "static void moe_routed(Model *m, int layer, float *x, int S, float *logits, float *out) {"
      if src.count(start) != 1 or src.count(stop) != 1 or src.count(anchor) != 1:
          raise SystemExit("olmoe.c: local expert kernel anchors changed")
-     begin, end = src.index(start), src.index(stop)
-@@ -332,9 +341,15 @@ static int lmb_olmoe_reference(void *opaque, int layer, int expert,
+@@ -342,9 +351,15 @@ static int lmb_olmoe_reference(void *opaque, int layer, int expert,
      LmbOlmoeLocal *ctx = opaque;
      Model *m = ctx->m;
      const char *idot = getenv("IDOT");
@@ -105,8 +51,8 @@ index 90da14c..5bed94e 100755
 +    fused3 = g_fused3;
 +#endif
      if (D != m->c.hidden || layer < 0 || layer >= m->c.n_layers ||
-         expert < 0 || expert >= m->c.n_experts || m->quant_bits != 8 ||
--        (idot && *idot == '1') || g_fused3 || g_pilot) return -1;
+         expert < 0 || expert >= m->c.n_experts || m->quant_bits != 8 || m->gx ||
+-        (idot && *idot == '1') || g_pilot) return -1;
 +        (idot && *idot == '1') || fused3 || g_pilot) return -1;
      /* Do not call expert_get: a reference must NEVER fetch a missing weight.
       * The model's existing cache lock protects the resident slot lifetime. */
@@ -195,7 +141,7 @@ index 0000000..2371859
 +run_case "$T/line" "line: hello world 🦜" "$T/line.out"
 +echo "  ✓ prompt dialect and reset-before-generate"
 diff --git a/lumabri.c b/lumabri.c
-index 8e27707..1ee0cca 100644
+index 9c21a90..135b076 100644
 --- a/lumabri.c
 +++ b/lumabri.c
 @@ -3,6 +3,7 @@
@@ -235,7 +181,7 @@ index 8e27707..1ee0cca 100644
  #include "lumabri_proto.h"
  #include "lumabri_run_gate.h"
  #include "src/runtime/lumabri_session_limits.h"
-@@ -2428,9 +2437,6 @@ static int engine_wait_ready(Engine *e) {
+@@ -2439,9 +2448,6 @@ static int engine_wait_ready(Engine *e) {
      }
  }
  
@@ -245,7 +191,7 @@ index 8e27707..1ee0cca 100644
  /* Some engines (DeepSeek V4) print a dashboard on stdout between the reply text:
   * whole lines like `EMAP 43 256 <hex>`, `TIERS 0 …`, `HITS …`, `HWINFO …`,
   * `PROF …`. They are diagnostics, not generated tokens, and they used to land
-@@ -2442,15 +2448,29 @@ static int engine_wait_ready(Engine *e) {
+@@ -2453,15 +2459,29 @@ static int engine_wait_ready(Engine *e) {
  typedef struct { int mode; char pfx[8]; int pfxn; } TelFilter;
  enum { TF_LINESTART = 0, TF_MID, TF_DROP };
  
@@ -278,7 +224,7 @@ index 8e27707..1ee0cca 100644
              t->pfxn = 0; continue;
          }
          if (t->pfxn < (int)sizeof t->pfx) t->pfx[t->pfxn++] = c;
-@@ -2466,21 +2486,27 @@ static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
+@@ -2477,21 +2497,27 @@ static void emit_no_tel(const char *p, size_t n, TelFilter *t) {
          }
          if (is_tel) { t->pfxn = 0; t->mode = TF_DROP; }
          else if (!maybe || t->pfxn == (int)sizeof t->pfx) {   /* ruled out: it is text */
@@ -310,7 +256,7 @@ index 8e27707..1ee0cca 100644
      const char *S = FRAME_END;
      size_t SL = strlen(S), cap = 8192, len = 0, shown = 0;
      char *buf = malloc(cap), *hit = NULL;
-@@ -2502,12 +2528,15 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -2513,12 +2539,15 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
          /* hold back SL-1 bytes: a sentinel may straddle two reads */
          size_t safe = hit ? (size_t)(hit - buf) : (len > SL ? len - SL : 0);
          if (safe > shown) {
@@ -328,7 +274,7 @@ index 8e27707..1ee0cca 100644
      size_t after = (size_t)(hit - buf) + SL;
      char rest[256];
      size_t rl = len > after ? len - after : 0;
-@@ -2529,6 +2558,10 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
+@@ -2540,6 +2569,10 @@ static int stream_until_end(Engine *e, char *statline, size_t scap) {
      }
  }
  
@@ -339,7 +285,7 @@ index 8e27707..1ee0cca 100644
  /* ---- serve codec client: UI is only a consumer of the shared reader ------ */
  #include "src/runtime/lumabri_reply_stream.h"
  /* Read a serve-codec reply: DATA frames (the generated text) until DONE. Bare
-@@ -4607,6 +4640,427 @@ static int cmd_chat(int argc, char **argv) {
+@@ -4614,6 +4647,427 @@ static int cmd_chat(int argc, char **argv) {
      return chat_failed;
  }
  
@@ -767,7 +713,7 @@ index 8e27707..1ee0cca 100644
  /* ---- key: the operator's identity ---------------------------------------
   * Ed25519 keypair. The secret signs the swarm's ground truth and belongs
   * only on the machine that owns the model — ideally offline, since the
-@@ -5603,6 +6057,8 @@ int main(int argc, char **argv) {
+@@ -5633,6 +6087,8 @@ int main(int argc, char **argv) {
      if (argc >= 2 && !strcmp(argv[1], "serve")) return cmd_serve(argc - 2, argv + 2);
      if (argc == 2 && !strcmp(argv[1], "chat") && g_tty && isatty(0)) return cmd_home();
      if (argc >= 2 && !strcmp(argv[1], "chat")) return cmd_chat(argc - 2, argv + 2);
@@ -776,7 +722,7 @@ index 8e27707..1ee0cca 100644
      /* Interactive entry points share one workspace. Explicit flags remain
       * available to scripts without inheriting an implicit sharing role. */
      if (argc == 1 && g_tty) return cmd_home();
-@@ -5622,6 +6078,7 @@ int main(int argc, char **argv) {
+@@ -5652,6 +6108,7 @@ int main(int argc, char **argv) {
          "  lumabri peer-key                                           print this machine's endpoint identity\n"
          "  lumabri serve --model DIR [--port 7300] [--join TRACKER]   share a model\n"
          "  lumabri chat  [--tracker HOST:7300] [--model NAME]         chat with it\n"
@@ -785,61 +731,26 @@ index 8e27707..1ee0cca 100644
      return 2;
  }
 diff --git a/tools/prepare_v41_range.py b/tools/prepare_v41_range.py
-index 19eb9e6..906ca3c 100644
+index 8279c19..3b7e406 100644
 --- a/tools/prepare_v41_range.py
 +++ b/tools/prepare_v41_range.py
-@@ -20,8 +20,10 @@ def replace_once(text, before, after):
+@@ -20,6 +20,8 @@ def replace_once(text, before, after):
  def prepare(text):
      # These hooks are audited against this source, not against similarly named
      # functions in a future release. Deliberate revalidation is required.
--    if hashlib.sha256(text.encode()).hexdigest() != '29957921abf6febf6c409b3aac22319065acddc6f9e303df1b4e02b30d10b141':
--        raise ValueError('V4.1 range engine requires pinned Colibri 1.12.1')
 +    # Colibri v2.1.0 kept the audited sites; the forward loop still starts at
 +    # `chained` so a Vulkan prefix is not run again on the CPU.
-+    if hashlib.sha256(text.encode()).hexdigest() != '3dbc511047cc0fd40b09d8476d00bf6cdbef08f54ebd70cf4d10b24e10c833ff':
-+        raise ValueError('V4.1 range engine requires pinned Colibri v2.1.0')
+     if hashlib.sha256(text.encode()).hexdigest() != '3dbc511047cc0fd40b09d8476d00bf6cdbef08f54ebd70cf4d10b24e10c833ff':
+         raise ValueError('V4.1 range engine requires pinned Colibri 2.1.0')
      text = replace_once(text, '    int fd_w, fd_s;\n    int64_t off_w, off_s, rows;',
-                         '    int fd_w, fd_s;\n    uint8_t *resident_w, *resident_s;\n    int64_t off_w, off_s, rows;')
-     text = replace_once(text, '    t->rows = w->nbytes / head_dim;', '''    t->rows = w->nbytes / head_dim;
-@@ -31,17 +33,17 @@ def prepare(text):
-     t->resident_s = xmalloc((size_t)s->nbytes, "resident Engram scales");
-     st_pread_full(t->fd_w, t->resident_w, w->nbytes, t->off_w, "prepare Engram weights");
-     st_pread_full(t->fd_s, t->resident_s, s->nbytes, t->off_s, "prepare Engram scales");''')
--    text = replace_once(text, '''        st_pread_full(t->fd_w, bytes, head_dim, t->off_w + id * head_dim, "engram row");
--        st_pread_full(t->fd_s, scales, groups, t->off_s + id * groups, "engram scale");''', '''        if (id < 0 || id >= t->rows || !t->resident_w || !t->resident_s) exit(1);
--        memcpy(bytes, t->resident_w + (size_t)id * head_dim, (size_t)head_dim);
--        memcpy(scales, t->resident_s + (size_t)id * groups, (size_t)groups);''')
-+    text = replace_once(text, '''            st_pread_full(t->fd_w, bytes, head_dim, t->off_w + id * head_dim, "engram row");
-+            st_pread_full(t->fd_s, scales, groups, t->off_s + id * groups, "engram scale");''', '''            if (id < 0 || id >= t->rows || !t->resident_w || !t->resident_s) exit(1);
-+            memcpy(bytes, t->resident_w + (size_t)id * head_dim, (size_t)head_dim);
-+            memcpy(scales, t->resident_s + (size_t)id * groups, (size_t)groups);''')
-     text = replace_once(text, "    Cfg c;\n    shards S;", """    Cfg c;
-     int range_begin, range_end, range_enabled, context_limit;
-     const float *boundary_input, *boundary_mix;
-     float *boundary_output, *boundary_output_mix;
-     shards S;""")
--    text = replace_once(text, '    cfg_load(c, snap);\n    attn_project_check(c);',
--                        '    cfg_load(c, snap);\n    if (m->context_limit >= 2 && m->context_limit < c->max_positions) c->max_positions = m->context_limit;\n    attn_project_check(c);')
-+    text = replace_once(text, '    cfg_load(c, snap);\n    if (g_v41_dry && c->max_positions > 4 * c->window) c->max_positions = 4 * c->window;   /* nothing runs */\n    attn_project_check(c);',
-+                        '    cfg_load(c, snap);\n    if (g_v41_dry && c->max_positions > 4 * c->window) c->max_positions = 4 * c->window;   /* nothing runs */\n    if (m->context_limit >= 2 && m->context_limit < c->max_positions) c->max_positions = m->context_limit;\n    attn_project_check(c);')
-     # No global head/embedding and no unrelated layer weights on a donor.
-     text = replace_once(text, '    wb_load(&m->S, &m->embed, "embed.weight", c->vocab, dim);',
-                         '    if (!m->range_enabled) {\n    wb_load(&m->S, &m->embed, "embed.weight", c->vocab, dim);')
-@@ -51,16 +53,23 @@ def prepare(text):
-                         '    for (int i = 0; i < c->n_layers; i++) {\n        Layer *l = &m->L[i];\n        l->engram_index = -1;\n        if (m->range_enabled && (i < m->range_begin || i >= m->range_end)) continue;')
-     text = replace_once(text, '            m->L[layer].engram_index = t;',
-                         '            if (m->range_enabled && (layer < m->range_begin || layer >= m->range_end)) continue;\n            m->L[layer].engram_index = t;')
--    text = replace_once(text, '    for (int i = 0; i < c->n_layers; i++) cache_init(m, &m->cache[i], ecap);', """    memset(m->cache, 0, (size_t)c->n_layers * sizeof(LCache));
-+    text = replace_once(text, '''    for (int i = 0; i < c->n_layers; i++) {
-+        if (g_v41_dry) { memset(&m->cache[i], 0, sizeof(LCache)); continue; }   /* nothing is read */
-+        cache_init(m, &m->cache[i], ecap, 0);
-+    }''', """    memset(m->cache, 0, (size_t)c->n_layers * sizeof(LCache));
+@@ -81,14 +83,18 @@ static void lmb_v41_engram_read(const EngramTable *t, int scales, void *out,
+         cache_init(m, &m->cache[i], ecap, 0);
+     }''', """    memset(m->cache, 0, (size_t)c->n_layers * sizeof(LCache));
      for (int i = 0; i < c->n_layers; i++) {
 -        if (!m->range_enabled || (i >= m->range_begin && i < m->range_end))
--            cache_init(m, &m->cache[i], ecap);
 +        if (!m->range_enabled || (i >= m->range_begin && i < m->range_end)) {
 +            if (g_v41_dry) { memset(&m->cache[i], 0, sizeof(LCache)); continue; }
-+            cache_init(m, &m->cache[i], ecap, 0);
+             cache_init(m, &m->cache[i], ecap, 0);
 +        }
          /* Foreign KV owners are STATE replicas, never weight replicas. */
          else if (c->kv_source[i]) {
@@ -852,21 +763,12 @@ index 19eb9e6..906ca3c 100644
          }
      }""")
      text = replace_once(text, '    spec_load(m, ecap);', '    /* Text, non-speculative range oracle: DSpark is a separate contract. */')
-@@ -79,14 +88,14 @@ def prepare(text):
-     f = replace_once(f, '    /* V41_TRACE=2', '''    if (m->boundary_mix) memcpy(pre_mix, m->boundary_mix, (size_t)n * hc * sizeof(float));
+@@ -108,7 +114,7 @@ static void lmb_v41_engram_read(const EngramTable *t, int scales, void *out,
  
      /* V41_TRACE=2''')
--    f = replace_once(f, '    for (int layer = 0; layer < c->n_layers; layer++) {',
+     f = replace_once(f, '    for (int layer = chained; layer < c->n_layers; layer++) {',
 -                    '    for (int layer = m->range_enabled ? m->range_begin : 0;\n         layer < (m->range_enabled ? m->range_end : c->n_layers); layer++) {')
-+    f = replace_once(f, '    for (int layer = chained; layer < c->n_layers; layer++) {',
 +                    '    for (int layer = m->range_enabled ? m->range_begin : chained;\n         layer < (m->range_enabled ? m->range_end : c->n_layers); layer++) {')
      f = replace_once(f, "    /* the last block's FFN mix collapses the stream one final time */", """    if (m->boundary_output) {
          memcpy(m->boundary_output, h, (size_t)n * hc * dim * sizeof(float));
          memcpy(m->boundary_output_mix, pre_mix, (size_t)n * hc * sizeof(float));
-     } else {
-     /* the last block's FFN mix collapses the stream one final time */""")
--    f = replace_once(f, '    m->pos += n;', '    }\n    m->pos += n;')
-+    f = replace_once(f, '    m->pos += n_all;', '    }\n    m->pos += n_all;')
-     return text[:at] + f + text[end:]
- 
- 
