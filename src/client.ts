@@ -41,7 +41,7 @@ export interface LumabriStatusResult {
 
 export function createQvacProviderPool(options: CreateQvacProviderPoolOptions): QvacProviderPool {
   const sdkOperations = providerOperationsForSdk({
-    heartbeat,
+    heartbeat: heartbeat as unknown as QvacHeartbeatOperation,
     loadModel: async (loadOptions) => loadModel(loadOptions as never)
   })
   return new QvacProviderPool({
