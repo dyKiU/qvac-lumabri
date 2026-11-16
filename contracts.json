@@ -108,11 +108,11 @@
       "status": "candidate",
       "adapter": "main",
       "qvac": {
-        "sdk": "0.23.0",
-        "sdkGitHead": "4badf6ff1900bbf099b63792fe663a33cc0e6c82",
-        "cli": "0.18.0",
-        "cliGitHead": "4badf6ff1900bbf099b63792fe663a33cc0e6c82",
-        "sourceRef": "4badf6ff1900bbf099b63792fe663a33cc0e6c82",
+        "sdk": "0.24.0",
+        "sdkGitHead": "1f559be4e208ee7e58e775bde4dd078263ca740c",
+        "cli": "0.19.0",
+        "cliGitHead": "1f559be4e208ee7e58e775bde4dd078263ca740c",
+        "sourceRef": "1f559be4e208ee7e58e775bde4dd078263ca740c",
         "delegatedPluginRpc": false
       },
       "gatewayProtocol": 1,
@@ -126,7 +126,7 @@
       "lumabri": {
         "releaseBase": "v0.8.0",
         "baseline": "post-v0.8.0",
-        "sourceRef": "decd01e196cb04d92908de863a67a350de24615b",
+        "sourceRef": "d5f752d253444d16fc1f4f5998b9a0483f8bfe12",
         "gatewayPatch": "native/lumabri-gateway-main.patch"
       },
       "colibri": {
