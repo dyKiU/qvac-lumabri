@@ -294,6 +294,19 @@ test('keeps provider failure metadata bounded to public contract fields', async 
   })
 })
 
+test('treats optional-RPC heartbeats like local-only SDK defaults', async () => {
+  const rpcStyle = providerOperationsForSdk({
+    heartbeat: async (options?: { timeout?: number }) => {
+      void options
+    },
+    loadModel: async () => 'local-model'
+  })
+  await assert.rejects(
+    rpcStyle.heartbeat({ delegate: { providerPublicKey: key('b'), timeout: 100 } }),
+    /cannot delegate to a provider/
+  )
+})
+
 test('keeps delegated SDK operations and rejects local-only SDK defaults', async () => {
   const seen: string[] = []
   const delegated = providerOperationsForSdk({

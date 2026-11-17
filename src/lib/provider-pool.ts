@@ -47,16 +47,28 @@ const delegatedProviderUnavailable =
   'Installed QVAC SDK cannot delegate to a provider'
 
 /**
- * QVAC 0.19 and later publish a local-only heartbeat (no parameters) and drop
- * unknown `delegate` fields from loadModel. Calling those defaults would mark
- * every provider healthy and then load on the local worker. A parameterless
- * heartbeat is that SDK shape; caller-supplied operations are left unchanged.
+ * QVAC 0.19–0.23 publish a local-only heartbeat (no parameters). 0.24+ adds
+ * optional RPC options but still does not accept `{ delegate }`. Calling those
+ * defaults would mark every provider healthy and then load on the local worker.
+ * Caller-supplied operations that implement provider delegation are unchanged.
  */
+export function sdkSupportsProviderDelegation(
+  heartbeat: (...args: readonly unknown[]) => unknown
+): boolean {
+  if (heartbeat.length === 0) return false
+  return /\bdelegate\b/.test(Function.prototype.toString.call(heartbeat))
+}
+
 export function providerOperationsForSdk(sdk: {
-  heartbeat: QvacHeartbeatOperation
+  heartbeat: (...args: readonly unknown[]) => Promise<unknown>
   loadModel: QvacLoadModelOperation
 }): { heartbeat: QvacHeartbeatOperation; loadModel: QvacLoadModelOperation } {
-  if (sdk.heartbeat.length > 0) return sdk
+  if (sdkSupportsProviderDelegation(sdk.heartbeat)) {
+    return {
+      heartbeat: sdk.heartbeat as QvacHeartbeatOperation,
+      loadModel: sdk.loadModel
+    }
+  }
   const unavailable = (): Promise<never> => Promise.reject(new Error(delegatedProviderUnavailable))
   return { heartbeat: unavailable, loadModel: unavailable }
 }
