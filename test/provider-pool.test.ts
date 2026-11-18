@@ -309,6 +309,15 @@ test('keeps delegated SDK operations and rejects local-only SDK defaults', async
     `loaded:${key('a')}`
   )
 
+  const localRpcOnly = providerOperationsForSdk({
+    heartbeat: async (_options?: { timeout?: number }) => {},
+    loadModel: async () => 'local-model'
+  })
+  await assert.rejects(
+    localRpcOnly.heartbeat({ delegate: { providerPublicKey: key('c'), timeout: 100 } }),
+    /cannot delegate to a provider/
+  )
+
   let loaded = false
   const localOnly = providerOperationsForSdk({
     heartbeat: async () => {},
