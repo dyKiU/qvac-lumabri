@@ -46,17 +46,33 @@ export type QvacLoadModelOperation = (
 const delegatedProviderUnavailable =
   'Installed QVAC SDK cannot delegate to a provider'
 
+/** True when the installed SDK exports a heartbeat that routes to remote providers. */
+function sdkHeartbeatSupportsDelegation(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- inspect the installed SDK export
+  heartbeat: (...args: any[]) => unknown
+): boolean {
+  if (heartbeat.length === 0) return false
+  const source = Function.prototype.toString.call(heartbeat)
+  return /\bdelegate\b/.test(source)
+}
+
 /**
- * QVAC 0.19 and later publish a local-only heartbeat (no parameters) and drop
- * unknown `delegate` fields from loadModel. Calling those defaults would mark
- * every provider healthy and then load on the local worker. A parameterless
- * heartbeat is that SDK shape; caller-supplied operations are left unchanged.
+ * QVAC 0.19–0.23 publish a local-only heartbeat (no parameters). 0.24 adds
+ * optional RPC options (arity 1) without provider delegation. Passing those
+ * defaults through would mark every provider healthy and load on the local
+ * worker. Only heartbeats that mention `delegate` are treated as pool-safe.
  */
 export function providerOperationsForSdk(sdk: {
-  heartbeat: QvacHeartbeatOperation
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK heartbeat arity drifts across releases
+  heartbeat: (...args: any[]) => unknown
   loadModel: QvacLoadModelOperation
 }): { heartbeat: QvacHeartbeatOperation; loadModel: QvacLoadModelOperation } {
-  if (sdk.heartbeat.length > 0) return sdk
+  if (sdkHeartbeatSupportsDelegation(sdk.heartbeat)) {
+    return {
+      heartbeat: sdk.heartbeat as QvacHeartbeatOperation,
+      loadModel: sdk.loadModel
+    }
+  }
   const unavailable = (): Promise<never> => Promise.reject(new Error(delegatedProviderUnavailable))
   return { heartbeat: unavailable, loadModel: unavailable }
 }
