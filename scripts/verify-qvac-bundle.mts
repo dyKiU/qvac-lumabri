@@ -13,7 +13,10 @@ const manifest: BundleManifest = JSON.parse(
 )
 
 assert(entry.includes('@lumabri/qvac-adapter/plugin'), 'adapter plugin missing from worker entry')
-assert(entry.includes('registerPlugin(customPlugin0)'), 'adapter plugin is not registered')
+assert(
+  entry.includes('registerPlugin(customPlugin0)') || entry.includes('plugins: [customPlugin0]'),
+  'adapter plugin is not registered'
+)
 assert.equal(manifest.version, 1)
 assert(manifest.addons.includes('bare-subprocess'), 'Bare subprocess addon missing from manifest')
 assert.match(manifest.bundleId, /^[0-9a-f]{64}$/)

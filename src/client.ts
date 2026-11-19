@@ -41,7 +41,8 @@ export interface LumabriStatusResult {
 
 export function createQvacProviderPool(options: CreateQvacProviderPoolOptions): QvacProviderPool {
   const sdkOperations = providerOperationsForSdk({
-    heartbeat,
+    // Published @qvac/sdk heartbeats are local-only RPC calls; arity is checked at runtime.
+    heartbeat: heartbeat as QvacHeartbeatOperation,
     loadModel: async (loadOptions) => loadModel(loadOptions as never)
   })
   return new QvacProviderPool({
