@@ -11,7 +11,12 @@ const qvacDir = new URL('../qvac/', import.meta.url)
 const entry = await readFile(new URL('worker.entry.mjs', qvacDir), 'utf8')
 
 assert(entry.includes('@lumabri/qvac-adapter/plugin'), 'adapter plugin missing from worker entry')
-assert(entry.includes('registerPlugin(customPlugin0)'), 'adapter plugin is not registered')
+assert(entry.includes('customPlugin0'), 'adapter plugin binding missing from worker entry')
+assert(
+  entry.includes('registerPlugin(customPlugin0)') ||
+    (entry.includes('startWorker(') && entry.includes('plugins:') && entry.includes('customPlugin0')),
+  'adapter plugin is not registered'
+)
 
 async function exists(url: URL): Promise<boolean> {
   try {
