@@ -329,3 +329,19 @@ test('keeps delegated SDK operations and rejects local-only SDK defaults', async
   )
   assert.equal(loaded, false)
 })
+
+test('treats published SDK heartbeat arity as local-only', async () => {
+  async function heartbeat(): Promise<unknown> {
+    return {}
+  }
+  Object.defineProperty(heartbeat, 'name', { value: 'heartbeat' })
+
+  const bound = providerOperationsForSdk({
+    heartbeat,
+    loadModel: async () => 'local'
+  })
+  await assert.rejects(
+    bound.heartbeat({ delegate: { providerPublicKey: key('c'), timeout: 50 } }),
+    /cannot delegate to a provider/
+  )
+})
