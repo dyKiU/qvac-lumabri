@@ -1,8 +1,8 @@
 diff --git a/engine_patches/deepseek_v4_p2p.py b/engine_patches/deepseek_v4_p2p.py
-index 7db5a97..d7b3a7d 100644
+index 7db5a97..2cfc283 100644
 --- a/engine_patches/deepseek_v4_p2p.py
 +++ b/engine_patches/deepseek_v4_p2p.py
-@@ -73,16 +73,10 @@ def main():
+@@ -73,22 +73,14 @@ def main():
           '        }\n'
           '    }\n'
           '#endif\n'),
@@ -16,15 +16,34 @@ index 7db5a97..d7b3a7d 100644
 -        #
 -        # 2.1 zero-initializes these leases and already keeps one element
 -        # for selected=0. Preserve both guarantees on failed or delegated runs.
-+        # site 2b — moe_token_pipeline: add the remote partial, then the
-+        # views array. Colibri v2.1.0 zeroes views with calloc and still
-+        # allocates one element when selected is 0. Leave that allocation
-+        # unchanged.
++        # site 2b — moe_token_pipeline: merge the remote partial after zeroing
++        # output. Colibri v2.2.0 hoists view allocation ahead of the shared
++        # expert, so anchor the post-memset dual-loader prologue instead.
          ('    if (!result) memset(output, 0, (size_t)d * sizeof(*output));\n'
           '\n'
           '#ifdef COLI_V4_EXPERIMENTAL_DUAL_EXPERT_LOADER\n'
+-         '    /* Zeroed up front: every exit releases the views below, and one that\n'
+-         '     * fails before the fetch pass fills them must find no lease there. */\n'
+-         '    ColiExpertView *views = calloc((size_t)(selected ? selected : 1), sizeof(*views));',
++         '#ifdef COLI_V4_GPU_TIER\n'
++         '    int gpu_compute = 0;\n',
+          '    if (!result) memset(output, 0, (size_t)d * sizeof(*output));\n'
+          '#ifdef LUMABRI_P2P\n'
+          '    if (!result && lumi_partial) {\n'
+@@ -98,9 +90,8 @@ def main():
+          '#endif\n'
+          '\n'
+          '#ifdef COLI_V4_EXPERIMENTAL_DUAL_EXPERT_LOADER\n'
+-         '    /* Zeroed up front: every exit releases the views below, and one that\n'
+-         '     * fails before the fetch pass fills them must find no lease there. */\n'
+-         '    ColiExpertView *views = calloc((size_t)(selected ? selected : 1), sizeof(*views));'),
++         '#ifdef COLI_V4_GPU_TIER\n'
++         '    int gpu_compute = 0;\n'),
+         # site 3 — v4_moe_batch_union: batch, reset n
+         ('    if (!result)\n'
+          '        memset(outputs, 0, (size_t)batch * d * sizeof(*outputs));\n'
 diff --git a/engine_patches/make_patches.py b/engine_patches/make_patches.py
-index c209995..5bed94e 100755
+index c209995..ca2281f 100755
 --- a/engine_patches/make_patches.py
 +++ b/engine_patches/make_patches.py
 @@ -177,6 +177,8 @@ KIMI = [
@@ -56,19 +75,23 @@ index c209995..5bed94e 100755
  #endif
  """, where="before"),
  ]
-@@ -307,6 +314,8 @@ def olmoe_local_callback(src):
+@@ -305,26 +312,21 @@ def olmoe_local_callback(src):
+     existing scratch and executes on the same engine thread. Exact anchors
+     deliberately fail if upstream changes the kernel's ownership/shape.
      """
-     start = "            Slot *e; expert_get(m, layer, idx[kk], &e);\n"
+-    start = "            Slot *e; expert_get(m, layer, idx[kk], &e);\n"
++    acquire = "            else olmoe_expert_acquire(&store, layer, idx[kk], &view);\n"
      stop = "            float w = val[kk];\n"
 +    # Colibri v2.0.0 moved the decode row into moe_routed, ahead of moe().
 +    # The helpers have to be defined before that call.
      anchor = "static void moe_routed(Model *m, int layer, float *x, int S, float *logits, float *out) {"
-     if src.count(start) != 1 or src.count(stop) != 1 or src.count(anchor) != 1:
+-    if src.count(start) != 1 or src.count(stop) != 1 or src.count(anchor) != 1:
++    if src.count(acquire) != 1 or src.count(stop) != 1 or src.count(anchor) != 1:
          raise SystemExit("olmoe.c: local expert kernel anchors changed")
-@@ -314,17 +323,6 @@ def olmoe_local_callback(src):
-     if end <= begin:
-         raise SystemExit("olmoe.c: local expert kernel boundaries reversed")
-     kernel = src[begin:end].replace("idx[kk]", "expert")
+-    begin, end = src.index(start), src.index(stop)
+-    if end <= begin:
+-        raise SystemExit("olmoe.c: local expert kernel boundaries reversed")
+-    kernel = src[begin:end].replace("idx[kk]", "expert")
 -    # 2.1 batches local prefill before the single-row loop. Keep that fast
 -    # path when no approved route exists; otherwise every row must reach the
 -    # Hybrid hook instead of silently reading the delegated experts locally.
@@ -80,10 +103,18 @@ index c209995..5bed94e 100755
 -        && !lumi_layer_on(layer)
 -#endif
 -    ) {   /* local prefill stays batched; approved Hybrid runs each routed row */''', 1)
++    # Colibri v2.2 acquired experts through ColiExpertView; mirror that path for
++    # one delegated expert without the parallel pre-acquire branch.
++    kernel = """    ColiExpertStore store = olmoe_expert_store(m);
++    ColiExpertView view;
++    olmoe_expert_acquire(&store, layer, expert, &view);
++    moe_expert_row(m, &view, xs, g, u, hh);
++    coli_expert_release(&store, &view);
++"""
      callback = """#ifdef LUMIBRI_P2P
  #include "src/runtime/lumabri_q8_reference.h"
  typedef struct { Model *m; float *g, *u; } LmbOlmoeLocal;
-@@ -334,6 +332,7 @@ static int lmb_olmoe_local(void *opaque, int layer, int expert,
+@@ -334,6 +336,7 @@ static int lmb_olmoe_local(void *opaque, int layer, int expert,
      Model *m = ctx->m;
      if (D != m->c.hidden || layer < 0 || layer >= m->c.n_layers ||
          expert < 0 || expert >= m->c.n_experts) return -1;
@@ -91,7 +122,7 @@ index c209995..5bed94e 100755
      float *g = ctx->g, *u = ctx->u;
  """ + kernel + """    return 0;
  }
-@@ -342,9 +341,15 @@ static int lmb_olmoe_reference(void *opaque, int layer, int expert,
+@@ -342,9 +345,15 @@ static int lmb_olmoe_reference(void *opaque, int layer, int expert,
      LmbOlmoeLocal *ctx = opaque;
      Model *m = ctx->m;
      const char *idot = getenv("IDOT");
@@ -109,6 +140,62 @@ index c209995..5bed94e 100755
      /* Do not call expert_get: a reference must NEVER fetch a missing weight.
       * The model's existing cache lock protects the resident slot lifetime. */
      pthread_mutex_lock(&g_pilot_mx);
+diff --git a/engine_patches/v41_boundary.h b/engine_patches/v41_boundary.h
+index 91a856d..ce9a2f8 100644
+--- a/engine_patches/v41_boundary.h
++++ b/engine_patches/v41_boundary.h
+@@ -35,12 +35,14 @@ static int lmb_v41_aux_write(Model *m, int counts[V41_MAX_LAYERS], float *out, s
+     float *count=out++; *count=0;
+     memset(out,0,(size_t)c->candidate_topk_blocks*sizeof(float));
+     if(m->candidate_rows) {
+-        if(c->candidate_block_size<=0) return -1;
+-        for(int j=0;j<m->candidate_width;j+=c->candidate_block_size) {
+-            if(!m->candidates[j]) continue;
+-            int k=(int)*count;
+-            if(k>=c->candidate_topk_blocks) return -1;
+-            out[k]=(float)(j/c->candidate_block_size+1); *count=(float)(k+1);
++        int topk=m->candidate_topk>0 ? m->candidate_topk :
++                 (c->candidate_topk_blocks>0 ? c->candidate_topk_blocks : 1);
++        for(int k=0;k<topk;k++) {
++            int32_t block=m->candidates ? m->candidates[k] : -1;
++            if(block<0) continue;
++            int slot=(int)*count;
++            if(slot>=c->candidate_topk_blocks) return -1;
++            out[slot]=(float)(block+1); *count=(float)(slot+1);
+         }
+     }
+     out+=c->candidate_topk_blocks;
+@@ -80,9 +82,10 @@ static int lmb_v41_aux_read(Model *m, int counts[V41_MAX_LAYERS], const float *i
+         if(lmb_v41_wire_int(*p++,-1,c->max_positions+c->window,&at) || (j>=topwidth && at!=-1)) return -1;
+     }
+     /* Validate and allocate the whole frame before changing live state. */
+-    uint8_t *mask=calloc(width ? (size_t)width : 1,1);
++    int topk=c->candidate_topk_blocks>0 ? c->candidate_topk_blocks : 1;
++    int32_t *ids=calloc((size_t)topk*(size_t)rows,sizeof(int32_t));
+     int *top=malloc(topwidth ? (size_t)topwidth*sizeof(int) : sizeof(int));
+-    if(!mask || !top) {free(mask);free(top);return -1;}
++    if(!ids || !top) {free(ids);free(top);return -1;}
+     p=in+1;
+     for(int i=0;i<c->n_layers;i++) if(c->kv_source[i]) {
+         p++; size_t kv=(size_t)c->head_dim, ik=(size_t)c->index_head_dim;
+@@ -95,12 +98,11 @@ static int lmb_v41_aux_read(Model *m, int counts[V41_MAX_LAYERS], const float *i
+     m->published_index_layer=pub ? pub-1 : 0;
+     m->published_index_k=pub ? m->L[pub-1].ikey : NULL;
+     p+=3;
+-    free(m->candidates); m->candidates=mask;
+-    for(int j=0;j<blocks;j++) {
+-        int first=((int)p[j]-1)*c->candidate_block_size;
+-        int last=first+c->candidate_block_size; if(last>width) last=width;
+-        memset(mask+first,1,(size_t)(last-first));
+-    }
++    free(m->candidates);
++    m->candidate_topk=topk;
++    m->candidates=ids;
++    for(int j=0;j<topk;j++) ids[j]=-1;
++    for(int j=0;j<blocks && j<topk;j++) ids[j]=(int32_t)((int)p[j]-1);
+     m->candidate_width=width; m->candidate_rows=rows;
+     p+=c->candidate_topk_blocks+2;
+     free(m->shared_topk); m->shared_topk=top;
 diff --git a/gateway_test.sh b/gateway_test.sh
 new file mode 100755
 index 0000000..2371859
@@ -782,10 +869,130 @@ index 78bafd3..37a6343 100644
          "  lumabri key   [--out NAME]                                 operator keypair\n");
      return 2;
  }
+diff --git a/tools/prepare_gguf_adapters.py b/tools/prepare_gguf_adapters.py
+index 3fd3fe0..102d9a5 100644
+--- a/tools/prepare_gguf_adapters.py
++++ b/tools/prepare_gguf_adapters.py
+@@ -77,7 +77,7 @@ static pthread_mutex_t lmb_olm_index_lock = PTHREAD_MUTEX_INITIALIZER;
+ static int lmb_olm_index(shards *S, const char *dir) {
+     pthread_mutex_lock(&lmb_olm_index_lock);
+     st_gguf_active = 0;
+-    st_init(S, dir);
++    st_init_multi(S, dir, getenv("COLI_MODEL_DIRS"));
+     int gguf = st_gguf_active;
+     gguf_close(&st_gguf_meta); gguf_close(&st_gguf_head);
+     st_gguf_active = 0;
+@@ -86,7 +86,8 @@ static int lmb_olm_index(shards *S, const char *dir) {
+ }
+ 
+ '''+anchor)
+-    s=replace_once(s,'    st_init(&m->S, snap);','    (void)lmb_olm_index(&m->S, snap);')
++    s=replace_once(s,'    st_init_multi(&m->S, snap, getenv("COLI_MODEL_DIRS"));',
++                   '    (void)lmb_olm_index(&m->S, snap);')
+     # OLMoE ends a reply with <|endoftext|>. The upstream capability names the
+     # tokenizer's |||IP_ADDRESS||| entry, which is a different id in the real
+     # vocabulary, so a hosted chat never stopped and ran to its token limit.
+@@ -94,7 +95,7 @@ static int lmb_olm_index(shards *S, const char *dir) {
+                    '''    capabilities->eos_token_id = tok_id_of(&engine->tokenizer, "<|endoftext|>");
+     if (capabilities->eos_token_id < 0)
+         capabilities->eos_token_id = tok_id_of(&engine->tokenizer, "|||IP_ADDRESS|||");''')
+-    s=replace_once(s,'    st_init(&engine->model.S, options->model_dir);',
++    s=replace_once(s,'    st_init_multi(&engine->model.S, options->model_dir, getenv("COLI_MODEL_DIRS"));',
+                    '    engine->model.gx = lmb_olm_index(&engine->model.S, options->model_dir);')
+     s=replace_once(s,'    engine->model.embed = load_t(&engine->model, "model.embed_tokens.weight", ec->vocab, ec->hidden);',
+                    '    engine->model.embed = load_t_gx(&engine->model, "model.embed_tokens.weight", ec->vocab, ec->hidden, NULL, &engine->model.gembed, 0);')
+diff --git a/tools/prepare_qwen38_gguf.py b/tools/prepare_qwen38_gguf.py
+index 53f16fe..cac078c 100644
+--- a/tools/prepare_qwen38_gguf.py
++++ b/tools/prepare_qwen38_gguf.py
+@@ -86,14 +86,16 @@ def prepare(root):
+ }
+ ''';part=part.replace(' st_tensor *t=m->ple_parts[p]; const char *nm=m->ple_part_names[p];',' st_tensor *t=m->ple_parts[p];')
+     s=s[:a]+part+s[b:]
+-    # Preparation-only temporary: never retain an unowned TLS buffer after an
+-    # engine has been unloaded, especially with a locked allocator.
+-    s=once(s,'''            static __thread uint8_t *raw; static __thread int64_t cap;
+-            if(cap<eb){free(raw);raw=(uint8_t*)malloc((size_t)eb);cap=raw?eb:0;if(!raw){fprintf(stderr,"OOM GGUF expert\\n");exit(1);}}''',
+-           '''            uint8_t *raw=(uint8_t*)malloc((size_t)eb);
++    # Colibri v2.2 moved GGUF scratch into q38_scratch(); only rewrite the legacy
++    # TLS buffer when an older engine source still carries it.
++    tls_anchor = '''            static __thread uint8_t *raw; static __thread int64_t cap;
++            if(cap<eb){free(raw);raw=(uint8_t*)malloc((size_t)eb);cap=raw?eb:0;if(!raw){fprintf(stderr,"OOM GGUF expert\\n");exit(1);}}'''
++    if tls_anchor in s:
++        s=once(s, tls_anchor,
++               '''            uint8_t *raw=(uint8_t*)malloc((size_t)eb);
+             if(!raw){fprintf(stderr,"OOM GGUF expert\\n");exit(1);}''')
+-    s=once(s,'            gq_r16_pack(st,(uint8_t*)w->data,raw,os[k],is[k]);',
+-           '            gq_r16_pack(st,(uint8_t*)w->data,raw,os[k],is[k]);free(raw);')
++        s=once(s,'            gq_r16_pack(st,(uint8_t*)w->data,raw,os[k],is[k]);',
++               '            gq_r16_pack(st,(uint8_t*)w->data,raw,os[k],is[k]);free(raw);')
+     s=once(s,'    free(m->ple_history); free(m->PLE_conv_state); free(m->c.is_attn); st_destroy(&m->S);',
+            '''    free(m->ple_history); free(m->PLE_conv_state); free(m->c.is_attn); st_destroy(&m->S);
+     if(m->ehit){for(int i=0;i<rows;i++)free(m->ehit[i]);free(m->ehit);}
+diff --git a/tools/prepare_qwen38_mtp.py b/tools/prepare_qwen38_mtp.py
+index 09e6a96..823ec4c 100644
+--- a/tools/prepare_qwen38_mtp.py
++++ b/tools/prepare_qwen38_mtp.py
+@@ -23,6 +23,7 @@ UPSTREAM_LOADER = '''    snprintf(nm,sizeof nm,"%s.pre_fc_norm_embedding.weight"
+ '''
+ UPSTREAM_STATE = '''    int mtp, mtp_wiring;
+     int mtp_drafts;                   /* drafts per verify when Q38_MTP_DRAFTS is unset */
++    int mtp_pstep;                    /* the verify's depth from the drafts' probabilities when Q38_MTP_PSTEP is unset */
+     size_t mtp_expert_bytes;          /* one routed expert of the head, gate, up and down (0 when fused) */
+     char mtp_prefix[32];
+     float *mtp_norm_emb, *mtp_norm_hid;
+@@ -30,6 +31,8 @@ UPSTREAM_STATE = '''    int mtp, mtp_wiring;
+     GatedResidual mtp_mixer;
+     int mtp_len, mtp_pend_n, mtp_pend_tok[Q38_SPEC_ROWS];
+     float *mtp_pend;                  /* Q38_SPEC_ROWS rows of hc_width */
++    DraftVocab *draft_vocab;          /* the tokens the head scores for a draft; NULL = the whole vocabulary */
++    float mtp_p;                      /* the last draft's probability under the head (q38_draft_p) */
+ '''
+ OPEN_FLAG = 'UINT64_C(0x4c4d424d54504844)'  # "LMBMTPHD", LMB_EDGE_OPEN_DRAFT_HEAD
+ 
+diff --git a/tools/prepare_qwen_gguf.py b/tools/prepare_qwen_gguf.py
+index 087dc35..503fc4e 100644
+--- a/tools/prepare_qwen_gguf.py
++++ b/tools/prepare_qwen_gguf.py
+@@ -77,8 +77,8 @@ def prepare(root):
+     start=s.index('static int xf_mode(Model *m) {')
+     end=s.index('\n/* The int4 experts',start)
+     body=s[start:end]
+-    body=once(body,'    static int v = -1;\n    if (v >= 0) return v;',
+-        '    if (m->lmb_xf_set) return m->lmb_xf_mode;\n    int v;')
++    body=once(body,'    static int v = -1, said;\n    if (v >= 0) {',
++        '    if (m->lmb_xf_set) return m->lmb_xf_mode;\n    static int v = -1, said;\n    if (v >= 0) {')
+     body=once(body,'    v = on;', '    v = on; m->lmb_xf_set=1; m->lmb_xf_mode=v;')
+     s=s[:start]+body+s[end:]
+     start=s.index('static int xf_a32(Model *m) {')
 diff --git a/tools/prepare_v41_range.py b/tools/prepare_v41_range.py
-index 1baacd9..29678c3 100644
+index 1baacd9..6c23cb6 100644
 --- a/tools/prepare_v41_range.py
 +++ b/tools/prepare_v41_range.py
+@@ -20,8 +20,8 @@ def replace_once(text, before, after):
+ def prepare(text):
+     # These hooks are audited against this source, not against similarly named
+     # functions in a future release. Deliberate revalidation is required.
+-    if hashlib.sha256(text.encode()).hexdigest() != '3dbc511047cc0fd40b09d8476d00bf6cdbef08f54ebd70cf4d10b24e10c833ff':
+-        raise ValueError('V4.1 range engine requires pinned Colibri 2.1.0')
++    if hashlib.sha256(text.encode()).hexdigest() != 'c64697791a22b577435a77a951826bf72f6e7d33e01c2a9e097dc580893ff713':
++        raise ValueError('V4.1 range engine requires pinned Colibri 2.2.0')
+     text = replace_once(text, '#include "st.h"', '#include "v41_st.h"')
+     text = replace_once(text, '    int fd_w, fd_s;\n    int64_t off_w, off_s, rows;',
+                         '    int fd_w, fd_s;\n    uint8_t *resident_w, *resident_s;\n    size_t resident_w_bytes, resident_s_bytes;\n    int64_t resident_base_w, resident_base_s;\n    int64_t off_w, off_s, rows;')
+@@ -66,9 +66,9 @@ static void lmb_v41_engram_read(const EngramTable *t, int scales, void *out,
+         bytes > size-(size_t)(offset-base)) exit(1);
+     memcpy(out, data+(size_t)(offset-base), bytes);
+ }''')
+-    # Limit replacements to the row decoder; preparation still performs reads.
+-    start = text.index('static const float *engram_row(')
+-    end = text.index('\nstatic ', start + 1)
++    # Limit replacements to the row fetch helper; preparation still performs reads.
++    start = text.index('static void engram_fetch(const EngramTable *t, int64_t id, int head_dim, float *out) {')
++    end = text.index('\nstatic const float *engram_row(', start)
+     row = text[start:end]
+     if row.count('st_pread_full(t->fd_w,') != 3 or row.count('st_pread_full(t->fd_s,') != 1:
+         raise ValueError('V4.1 Engram row read contract changed')
 @@ -96,8 +96,10 @@ static void lmb_v41_engram_read(const EngramTable *t, int scales, void *out,
          cache_init(m, &m->cache[i], ecap, 0);
      }''', """    memset(m->cache, 0, (size_t)c->n_layers * sizeof(LCache));

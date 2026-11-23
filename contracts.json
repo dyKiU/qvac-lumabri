@@ -110,8 +110,8 @@
       "qvac": {
         "sdk": "0.24.0",
         "sdkGitHead": "1f559be4e208ee7e58e775bde4dd078263ca740c",
-        "cli": "0.19.0",
-        "cliGitHead": "1f559be4e208ee7e58e775bde4dd078263ca740c",
+        "cli": "0.20.0",
+        "cliGitHead": "ee59035109a859ce29ff5e2ef4b115bb9113f4aa",
         "sourceRef": "1f559be4e208ee7e58e775bde4dd078263ca740c",
         "delegatedPluginRpc": false
       },
@@ -130,8 +130,8 @@
         "gatewayPatch": "native/lumabri-gateway-main.patch"
       },
       "colibri": {
-        "release": "v2.1.0",
-        "sourceRef": "0a5504a1dc64f86fcd0fe7db298b0448c730e7e6"
+        "release": "v2.2.0",
+        "sourceRef": "e479104ae01bdc40ce81e675299b1d230891b321"
       },
       "proof": [
         "unit",
