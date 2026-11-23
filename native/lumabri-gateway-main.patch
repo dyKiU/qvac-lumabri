@@ -140,6 +140,62 @@ index c209995..ca2281f 100755
      /* Do not call expert_get: a reference must NEVER fetch a missing weight.
       * The model's existing cache lock protects the resident slot lifetime. */
      pthread_mutex_lock(&g_pilot_mx);
+diff --git a/engine_patches/v41_boundary.h b/engine_patches/v41_boundary.h
+index 91a856d..ce9a2f8 100644
+--- a/engine_patches/v41_boundary.h
++++ b/engine_patches/v41_boundary.h
+@@ -35,12 +35,14 @@ static int lmb_v41_aux_write(Model *m, int counts[V41_MAX_LAYERS], float *out, s
+     float *count=out++; *count=0;
+     memset(out,0,(size_t)c->candidate_topk_blocks*sizeof(float));
+     if(m->candidate_rows) {
+-        if(c->candidate_block_size<=0) return -1;
+-        for(int j=0;j<m->candidate_width;j+=c->candidate_block_size) {
+-            if(!m->candidates[j]) continue;
+-            int k=(int)*count;
+-            if(k>=c->candidate_topk_blocks) return -1;
+-            out[k]=(float)(j/c->candidate_block_size+1); *count=(float)(k+1);
++        int topk=m->candidate_topk>0 ? m->candidate_topk :
++                 (c->candidate_topk_blocks>0 ? c->candidate_topk_blocks : 1);
++        for(int k=0;k<topk;k++) {
++            int32_t block=m->candidates ? m->candidates[k] : -1;
++            if(block<0) continue;
++            int slot=(int)*count;
++            if(slot>=c->candidate_topk_blocks) return -1;
++            out[slot]=(float)(block+1); *count=(float)(slot+1);
+         }
+     }
+     out+=c->candidate_topk_blocks;
+@@ -80,9 +82,10 @@ static int lmb_v41_aux_read(Model *m, int counts[V41_MAX_LAYERS], const float *i
+         if(lmb_v41_wire_int(*p++,-1,c->max_positions+c->window,&at) || (j>=topwidth && at!=-1)) return -1;
+     }
+     /* Validate and allocate the whole frame before changing live state. */
+-    uint8_t *mask=calloc(width ? (size_t)width : 1,1);
++    int topk=c->candidate_topk_blocks>0 ? c->candidate_topk_blocks : 1;
++    int32_t *ids=calloc((size_t)topk*(size_t)rows,sizeof(int32_t));
+     int *top=malloc(topwidth ? (size_t)topwidth*sizeof(int) : sizeof(int));
+-    if(!mask || !top) {free(mask);free(top);return -1;}
++    if(!ids || !top) {free(ids);free(top);return -1;}
+     p=in+1;
+     for(int i=0;i<c->n_layers;i++) if(c->kv_source[i]) {
+         p++; size_t kv=(size_t)c->head_dim, ik=(size_t)c->index_head_dim;
+@@ -95,12 +98,11 @@ static int lmb_v41_aux_read(Model *m, int counts[V41_MAX_LAYERS], const float *i
+     m->published_index_layer=pub ? pub-1 : 0;
+     m->published_index_k=pub ? m->L[pub-1].ikey : NULL;
+     p+=3;
+-    free(m->candidates); m->candidates=mask;
+-    for(int j=0;j<blocks;j++) {
+-        int first=((int)p[j]-1)*c->candidate_block_size;
+-        int last=first+c->candidate_block_size; if(last>width) last=width;
+-        memset(mask+first,1,(size_t)(last-first));
+-    }
++    free(m->candidates);
++    m->candidate_topk=topk;
++    m->candidates=ids;
++    for(int j=0;j<topk;j++) ids[j]=-1;
++    for(int j=0;j<blocks && j<topk;j++) ids[j]=(int32_t)((int)p[j]-1);
+     m->candidate_width=width; m->candidate_rows=rows;
+     p+=c->candidate_topk_blocks+2;
+     free(m->shared_topk); m->shared_topk=top;
 diff --git a/gateway_test.sh b/gateway_test.sh
 new file mode 100755
 index 0000000..2371859
