@@ -112,6 +112,16 @@ jobs:
           git commit -m "Refresh dev-next pins to current upstreams"
           git push origin "HEAD:${branch}"
           node --input-type=module -e 'import { writeFileSync } from "node:fs"; writeFileSync("pr-body.md", "<!-- upstream-pin-refresh -->\n\nUpdate dev-next Lumabri and Colibri pins to current main, and QVAC pins to npm latest.\n\nThe candidate and edge canaries on this pull request are the merge gate.\n")'
-          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+          set +e
+          create_output=$(gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
             --title "Refresh dev-next upstream pins" \
-            --body-file pr-body.md
+            --body-file pr-body.md 2>&1)
+          create_status=$?
+          set -e
+          printf '%s\n' "$create_output"
+          if [ "$create_status" -ne 0 ]; then
+            if grep -Fq "GitHub Actions is not permitted to create or approve pull requests" <<< "$create_output"; then
+              echo "::error title=Enable GitHub Actions pull-request creation::Repository owners must enable Settings > Actions > General > Workflow permissions > Allow GitHub Actions to create and approve pull requests."
+            fi
+            exit "$create_status"
+          fi
