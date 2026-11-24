@@ -11,6 +11,14 @@ name: Upstream autofix
 # - Leave upstream_run_id empty to use the latest failed Upstream compatibility run on main.
 # - Set force_launch=true to call the Cursor API without requiring a failed upstream run
 #   (useful to verify CURSOR_API_KEY; uses a minimal test prompt, autoCreatePR: false).
+# - Set launch_despite_open_pr=true to launch a fix agent even though an open autofix PR
+#   already exists (see "Skip when an autofix PR is already open" below).
+#
+# Duplicate suppression: no agent is launched while an open, same-repository pull request
+# carries the <!-- upstream-autofix --> marker; the job summary links that PR instead.
+#
+# Agent policy: agents may only rebase native/lumabri-gateway-main.patch onto new upstream
+# code, never change the patch's own +/- lines. upstream-automerge.yml enforces this.
 #
 # End-to-end path after a real upstream failure (no extra agent launches required to read):
 #   Upstream compatibility (fail on main, Lumabri or QVAC canary) → this workflow → agent PR
@@ -37,10 +45,16 @@ on:
         required: false
         type: boolean
         default: false
+      launch_despite_open_pr:
+        description: Launch even if an open upstream-autofix PR already exists
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   actions: read
   contents: read
+  pull-requests: read
 
 concurrency:
   group: upstream-autofix-${{ github.event.workflow_run.id || github.run_id }}
@@ -135,9 +149,45 @@ jobs:
           fi
           echo "launch=true" >> "$GITHUB_OUTPUT"
 
+      - name: Skip when an autofix PR is already open
+        id: open_pr
+        if: steps.canary.outputs.launch == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE_LAUNCH: ${{ inputs.force_launch }}
+          LAUNCH_DESPITE_OPEN_PR: ${{ inputs.launch_despite_open_pr }}
+        run: |
+          set -euo pipefail
+          if [ "$FORCE_LAUNCH" = true ] || [ "$LAUNCH_DESPITE_OPEN_PR" = true ]; then
+            echo "Open autofix PR check bypassed by workflow_dispatch input."
+            echo "launch=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Extension point: today any open autofix PR suppresses a launch. To suppress per
+          # failing stage, narrow this jq filter (e.g. also match a stage marker in the body).
+          open_pr=$(
+            gh pr list --repo "$GITHUB_REPOSITORY" --base main --state open --limit 100 \
+              --json number,url,body,isCrossRepository \
+              --jq '[.[] | select(.isCrossRepository == false and ((.body // "") | contains("<!-- upstream-autofix -->")))][0] // empty'
+          )
+          if [ -z "$open_pr" ]; then
+            echo "launch=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pr_url=$(jq -r .url <<< "$open_pr")
+          pr_number=$(jq -r .number <<< "$open_pr")
+          echo "launch=false" >> "$GITHUB_OUTPUT"
+          echo "Open autofix PR #${pr_number} already exists (${pr_url}); not launching another agent."
+          {
+            echo "### No agent launched"
+            echo
+            echo "An open upstream autofix PR already exists: [#${pr_number}](${pr_url})."
+            echo "Resolve or close it, or run this workflow with \`launch_despite_open_pr\` to launch anyway."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Collect failed upstream logs
         id: logs
-        if: steps.canary.outputs.launch == 'true'
+        if: steps.open_pr.outputs.launch == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ steps.upstream.outputs.run_id }}
@@ -160,7 +210,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Launch Cursor Cloud Agent
-        if: steps.canary.outputs.launch == 'true'
+        if: steps.open_pr.outputs.launch == 'true'
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           REPO_URL: https://github.com/${{ github.repository }}
@@ -208,11 +258,24 @@ jobs:
           Fix upstream compatibility for this repository:
           - When Candidate release freshness fails, set dev-next qvac.sdk, qvac.cli, sdkGitHead, and cliGitHead from npm latest @qvac/sdk and @qvac/cli, and set qvac.sourceRef to the SDK gitHead. The QVAC canary already builds that SDK commit.
           - Refresh Lumabri and Colibri candidate pins in contracts.json when those releases or heads moved.
-          - Rebase native/lumabri-gateway-main.patch if Lumabri main changed.
+          - Rebase native/lumabri-gateway-main.patch if Lumabri main changed (see the gateway patch policy below).
           - Keep README contract markers in sync (npm run docs:contracts).
           - Follow AGENTS.md: minimal scope, run npm run check and npm run check:hygiene before opening a PR.
           - Create a new branch off main using this run's assigned cursor/<topic>-<suffix> name. Do not reuse a previous run's branch.
           - Change only contracts.json, README.md, and native/lumabri-gateway-main.patch.
+          - Gateway patch policy (strict): you may only REBASE native/lumabri-gateway-main.patch
+            onto new upstream code. Context lines, line offsets, and hunk headers may move.
+            You must never add, remove, reorder, or edit the patch's own added (+) or removed (-)
+            lines, and must not add or drop files in the patch. In particular do not rewrite
+            engine_patches/* hunks and do not drop the prefill delegation guard
+            (if (S > 1 && !lumi_layer_on(layer)) in engine_patches/make_patches.py): the gateway
+            must keep delegating prompt prefill, and matching output tokens do not prove that.
+            If upstream changed code the patch's own lines touch and the patch cannot be rebased
+            without editing those lines, STOP: do not edit them. Open the PR anyway, leave the
+            patch's +/- lines as they are, put this exact line on its own in the PR description:
+            <!-- upstream-autofix-needs-human -->
+            and explain what upstream changed and what a human must decide. Auto-merge will not
+            run for that PR.
           - PR title must start with "Refresh upstream compatibility".
           - PR description must include these exact markers on their own lines:
             <!-- upstream-autofix -->
