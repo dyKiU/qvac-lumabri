@@ -4,6 +4,10 @@ name: Auto-merge upstream autofix
 # Autofix PRs must match the Cursor agent that launched them.
 # Pin-refresh PRs (cursor/upstream-pins-*) must carry the pin-refresh marker.
 # Both may change only contracts.json, README.md, and native/lumabri-gateway-main.patch.
+# A change to the gateway patch must be a pure rebase: scripts/check-gateway-patch-content.mts
+# compares the PR head patch with its merge base and rejects any changed +/- content line.
+# Ineligible PRs are never merged and the run still succeeds: the reasons go to the job
+# summary, the PR gets the autofix:needs-human label, and one comment per distinct reason set.
 # Requires "Allow auto-merge" and secret CURSOR_API_KEY.
 
 on:
@@ -57,15 +61,36 @@ jobs:
           fi
           echo "number=$number" >> "$GITHUB_OUTPUT"
 
+      - name: Check out trusted tooling from the default branch
+        if: steps.key.outputs.present == 'true' && steps.pr.outputs.skip != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        if: steps.key.outputs.present == 'true' && steps.pr.outputs.skip != 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install trusted tooling
+        if: steps.key.outputs.present == 'true' && steps.pr.outputs.skip != 'true'
+        run: npm ci --ignore-scripts
+
       - name: Queue auto-merge when eligible
         if: steps.key.outputs.present == 'true' && steps.pr.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
+          VERIFIED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           marker='<!-- upstream-autofix -->'
+          patch_path=native/lumabri-gateway-main.patch
+          review_label='autofix:needs-human'
+          review_marker='<!-- upstream-autofix-needs-human -->'
           view=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json \
             body,headRefName,isDraft,isCrossRepository,autoMergeRequest,files,url)
           body=$(echo "$view" | jq -r '.body // ""')
@@ -167,8 +192,9 @@ jobs:
           allowed=(
             contracts.json
             README.md
-            native/lumabri-gateway-main.patch
+            "$patch_path"
           )
+          reasons=()
           for path in "${changed[@]}"; do
             ok=false
             for entry in "${allowed[@]}"; do
@@ -178,10 +204,76 @@ jobs:
               fi
             done
             if [ "$ok" = false ]; then
-              echo "Out-of-scope file for auto-merge: $path" >&2
-              exit 1
+              reasons+=("Out-of-scope file for auto-merge: \`$path\`")
             fi
           done
+
+          if grep -Fq "$review_marker" <<< "$body"; then
+            reasons+=("The agent marked this PR for human review (\`$review_marker\` in the PR body).")
+          fi
+
+          patch_changed=false
+          for path in "${changed[@]}"; do
+            if [ "$path" = "$patch_path" ]; then
+              patch_changed=true
+            fi
+          done
+          if [ "$patch_changed" = true ]; then
+            git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"
+            head_sha=$(git rev-parse FETCH_HEAD)
+            if [ "$head_sha" != "$VERIFIED_SHA" ]; then
+              echo "PR head ${head_sha} is not the verified commit ${VERIFIED_SHA}; waiting for the next Upstream compatibility run"
+              exit 0
+            fi
+            merge_base=$(git merge-base origin/main "$head_sha")
+            if ! git show "${merge_base}:${patch_path}" > "$RUNNER_TEMP/patch-base" 2>/dev/null; then
+              reasons+=("\`$patch_path\` does not exist at the merge base, so its content cannot be compared.")
+            elif ! git show "${head_sha}:${patch_path}" > "$RUNNER_TEMP/patch-head" 2>/dev/null; then
+              reasons+=("\`$patch_path\` was deleted by this PR.")
+            elif ! patch_report=$(node --import tsx scripts/check-gateway-patch-content.mts \
+              --base "$RUNNER_TEMP/patch-base" --head "$RUNNER_TEMP/patch-head"); then
+              reasons+=("Gateway patch content changed; agents may only rebase \`$patch_path\` (context, offsets, hunk headers), never edit its own +/- lines. Details:"$'\n\n~~~~\n'"${patch_report}"$'\n~~~~')
+            else
+              echo "$patch_report"
+            fi
+          fi
+
+          if [ "${#reasons[@]}" -gt 0 ]; then
+            reason_text=
+            for reason in "${reasons[@]}"; do
+              reason_text+="- ${reason}"$'\n'
+            done
+            {
+              echo "### Auto-merge skipped for PR #${PR_NUMBER}: human review needed"
+              echo
+              printf '%s' "$reason_text"
+            } >> "$GITHUB_STEP_SUMMARY"
+            printf 'Auto-merge skipped for PR #%s:\n%s' "$PR_NUMBER" "$reason_text"
+
+            if [ "$queued" = true ]; then
+              gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --disable-auto
+              echo "Disabled previously queued auto-merge for PR #${PR_NUMBER}" >> "$GITHUB_STEP_SUMMARY"
+            fi
+
+            gh label create "$review_label" --repo "$GITHUB_REPOSITORY" --color D93F0B \
+              --description "Upstream autofix PR needs a human before merge" 2>/dev/null || true
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" \
+              -f "labels[]=${review_label}" > /dev/null
+
+            digest=$(printf '%s' "$reason_text" | sha256sum | cut -c1-12)
+            comment_marker="<!-- upstream-automerge-review:${digest} -->"
+            existing=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --jq '.[].body')
+            if grep -Fq "$comment_marker" <<< "$existing"; then
+              echo "Review comment for this reason set already posted"
+            else
+              comment=$(
+                printf '**Auto-merge skipped: human review needed.**\n\n%s\n%s\n' "$reason_text" "$comment_marker"
+              )
+              gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+                -f body="$comment" > /dev/null
+            fi
+            exit 0
+          fi
 
           if [ "$queued" = true ]; then
             echo "Auto-merge already queued for PR #${PR_NUMBER}"
@@ -190,3 +282,4 @@ jobs:
 
           gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --squash --delete-branch
           echo "Queued squash auto-merge for upstream autofix PR #${PR_NUMBER}"
+          echo "Queued squash auto-merge for PR #${PR_NUMBER}" >> "$GITHUB_STEP_SUMMARY"

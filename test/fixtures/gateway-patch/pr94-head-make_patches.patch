@@ -1,0 +1,98 @@
+diff --git a/engine_patches/make_patches.py b/engine_patches/make_patches.py
+index c209995..ca2281f 100755
+--- a/engine_patches/make_patches.py
++++ b/engine_patches/make_patches.py
+@@ -177,6 +177,8 @@ KIMI = [
+     }
+ #endif
+ """),
++    # Colibri v2.0.0 added the Vulkan result buffer (R, rslot). The U-writing
++    # call passes NULL,NULL; device-backed calls must stay local.
+     hook("""        experts_apply_union(m,li,nu,uid,pfirst,pcnt,poslist,wlist,z,LT,u,gate,up,hz,NULL,NULL);
+ """, """#ifdef LUMIBRI_P2P
+         if(lumi_layer_on(li)){
+@@ -264,10 +266,15 @@ QWEN36 = [
+     atexit(lumi_report);
+ #endif
+ """),
+-    hook("        if (use_qq) {\n", """#ifdef LUMIBRI_P2P
+-        if (!use_xf && !use_qt && !use_qq && !use_vk && !use_gq && !l->post_en && lumi_layer_on(layer) &&
+-            lumi_moe_apply(layer, idx, val, K, xs, D, out + (int64_t)s*D)) {
+-        } else
++    # Colibri v2.0.0 folded the planar runner into `else if (use_xf || use_vk)`.
++    # Anchor the legacy CPU loop (expert_hold) so Hybrid still skips only the
++    # arithmetic our glue implements, and leaves qq/xf/vk/qt runners alone.
++    hook("""            for (int kk = 0; kk < K; kk++) {
++                Slot *e = expert_hold(m, layer, idx[kk]);   /* the PILOT worker may not evict it mid-matmul */
++""", """#ifdef LUMIBRI_P2P
++            if (!use_qq && !use_xf && !use_vk && !use_qt && lumi_layer_on(layer) &&
++                lumi_moe_apply(layer, idx, val, K, xs, D, out + (int64_t)s*D)) {
++            } else
+ #endif
+ """, where="before"),
+ ]
+@@ -305,26 +312,21 @@ def olmoe_local_callback(src):
+     existing scratch and executes on the same engine thread. Exact anchors
+     deliberately fail if upstream changes the kernel's ownership/shape.
+     """
+-    start = "            Slot *e; expert_get(m, layer, idx[kk], &e);\n"
++    acquire = "            else olmoe_expert_acquire(&store, layer, idx[kk], &view);\n"
+     stop = "            float w = val[kk];\n"
++    # Colibri v2.0.0 moved the decode row into moe_routed, ahead of moe().
++    # The helpers have to be defined before that call.
+     anchor = "static void moe_routed(Model *m, int layer, float *x, int S, float *logits, float *out) {"
+-    if src.count(start) != 1 or src.count(stop) != 1 or src.count(anchor) != 1:
++    if src.count(acquire) != 1 or src.count(stop) != 1 or src.count(anchor) != 1:
+         raise SystemExit("olmoe.c: local expert kernel anchors changed")
+-    begin, end = src.index(start), src.index(stop)
+-    if end <= begin:
+-        raise SystemExit("olmoe.c: local expert kernel boundaries reversed")
+-    kernel = src[begin:end].replace("idx[kk]", "expert")
+-    # 2.1 batches local prefill before the single-row loop. Keep that fast
+-    # path when no approved route exists; otherwise every row must reach the
+-    # Hybrid hook instead of silently reading the delegated experts locally.
+-    prefill = "    if (S > 1) {   /* a prompt: expert by expert, the same bits as the loop below */"
+-    if src.count(prefill) != 1:
+-        raise SystemExit("olmoe.c: prefill delegation anchor changed")
+-    src = src.replace(prefill, '''    if (S > 1
+-#ifdef LUMIBRI_P2P
+-        && !lumi_layer_on(layer)
+-#endif
+-    ) {   /* local prefill stays batched; approved Hybrid runs each routed row */''', 1)
++    # Colibri v2.2 acquired experts through ColiExpertView; mirror that path for
++    # one delegated expert without the parallel pre-acquire branch.
++    kernel = """    ColiExpertStore store = olmoe_expert_store(m);
++    ColiExpertView view;
++    olmoe_expert_acquire(&store, layer, expert, &view);
++    moe_expert_row(m, &view, xs, g, u, hh);
++    coli_expert_release(&store, &view);
++"""
+     callback = """#ifdef LUMIBRI_P2P
+ #include "src/runtime/lumabri_q8_reference.h"
+ typedef struct { Model *m; float *g, *u; } LmbOlmoeLocal;
+@@ -334,6 +336,7 @@ static int lmb_olmoe_local(void *opaque, int layer, int expert,
+     Model *m = ctx->m;
+     if (D != m->c.hidden || layer < 0 || layer >= m->c.n_layers ||
+         expert < 0 || expert >= m->c.n_experts) return -1;
++    int I = m->c.inter;
+     float *g = ctx->g, *u = ctx->u;
+ """ + kernel + """    return 0;
+ }
+@@ -342,9 +345,15 @@ static int lmb_olmoe_reference(void *opaque, int layer, int expert,
+     LmbOlmoeLocal *ctx = opaque;
+     Model *m = ctx->m;
+     const char *idot = getenv("IDOT");
++    /* Segment objects compile with OLMOE_NO_MAIN and without AVX2, which
++     * leaves g_fused3 out of this translation unit. Fused3 is off there. */
++    int fused3 = 0;
++#if defined(__AVX2__) || !defined(OLMOE_NO_MAIN)
++    fused3 = g_fused3;
++#endif
+     if (D != m->c.hidden || layer < 0 || layer >= m->c.n_layers ||
+-        expert < 0 || expert >= m->c.n_experts || m->quant_bits != 8 || m->gx ||
+-        (idot && *idot == '1') || g_pilot) return -1;
++        expert < 0 || expert >= m->c.n_experts || m->quant_bits != 8 ||
++        (idot && *idot == '1') || fused3 || g_pilot) return -1;
+     /* Do not call expert_get: a reference must NEVER fetch a missing weight.
+      * The model's existing cache lock protects the resident slot lifetime. */
+     pthread_mutex_lock(&g_pilot_mx);

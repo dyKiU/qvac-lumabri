@@ -31,6 +31,18 @@ patch no longer applies. Typical fix:
    SHAs. A release tag may remain behind `main`. Run `npm run check`,
    `check:native-upstreams`, `check:freshness`, and `docs:contracts`.
 
+A rebase may only move context lines, offsets, and hunk headers. It must not
+add, remove, reorder, or edit the patch's own `+`/`-` lines (for example the
+prefill delegation guard `if (S > 1 && !lumi_layer_on(layer))` in
+`engine_patches/make_patches.py`), because that changes what the gateway does.
+When upstream changed code those lines touch, a human decides the new behaviour.
+Check a candidate rebase locally with:
+
+```sh
+node --import tsx scripts/check-gateway-patch-content.mts \
+  --base <old-patch> --head native/lumabri-gateway-main.patch
+```
+
 `scripts/apply-lumabri-gateway.sh` runs `git apply --check` first; on failure
 it prints remediation hints.
 
@@ -54,6 +66,23 @@ can launch a Cursor Cloud Agent (requires `CURSOR_API_KEY`). The workflow sets
    fired, agent PR includes `<!-- upstream-autofix -->` and token markers,
    **Verify** passes, then **Auto-merge upstream autofix** queues merge only
    when Cursor API metadata matches (see that workflow).
+
+Guard rails:
+
+- **One open autofix PR at a time.** If an open same-repository PR carries the
+  `<!-- upstream-autofix -->` marker, the workflow launches no agent and links
+  that PR in the job summary. Dispatch with **`launch_despite_open_pr`** to
+  launch anyway.
+- **Agent policy.** The agent prompt allows only a pure rebase of the gateway
+  patch (see above). If it cannot rebase without editing the patch's own lines
+  it must stop and put `<!-- upstream-autofix-needs-human -->` in the PR body.
+- **Eligibility is deterministic.** Auto-merge requires changed files within
+  `contracts.json`, `README.md`, and `native/lumabri-gateway-main.patch`, a
+  gateway patch whose `+`/`-` content lines equal the merge base's
+  (`scripts/check-gateway-patch-content.mts`), and no needs-human marker. An
+  ineligible PR is not merged, the run does not fail, the reasons are written to
+  the job summary, and the PR gets the `autofix:needs-human` label (created if
+  missing) plus one comment per distinct reason set.
 
 Do not rely on auto-merge until repository **Allow auto-merge** and
 `CURSOR_API_KEY` are configured.

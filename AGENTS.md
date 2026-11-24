@@ -39,6 +39,25 @@ When Lumabri `main` moves and `native/lumabri-gateway-main.patch` fails to apply
 - Pin-only drift is refreshed by `.github/workflows/upstream-pin-refresh.yml`.
   Autofix launches only when a Lumabri or QVAC canary job fails.
 
+## Gateway patch behaviour policy
+
+Applies to autofix agents and humans using the automation. The gateway patch's
+behaviour is a product decision, not a compatibility detail.
+
+- `native/lumabri-gateway-main.patch` may only be **rebased** onto new upstream
+ code: context lines, line offsets, and hunk headers may move.
+- Never add, remove, reorder, or change the patch's own `+`/`-` lines, and never
+ add or drop files in the patch. For example, do not drop the prefill delegation
+ guard (`if (S > 1 && !lumi_layer_on(layer))` in
+ `engine_patches/make_patches.py`): matching output tokens do not prove the
+ gateway still delegates prompt prefill.
+- If the patch cannot be rebased without editing its own lines, stop. Open the PR
+ with `<!-- upstream-autofix-needs-human -->` on its own line in the body,
+ explain what upstream changed, and leave the decision to a human.
+- `.github/workflows/upstream-automerge.yml` enforces this with
+ `scripts/check-gateway-patch-content.mts`; a violating PR is not auto-merged and
+ is labelled `autofix:needs-human`.
+
 ## Dependency updates
 
 - Dependabot groups production npm bumps, TypeScript tooling bumps, transitive npm bumps, and GitHub Actions bumps into separate pull requests.
