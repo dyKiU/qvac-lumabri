@@ -108,11 +108,11 @@
       "status": "candidate",
       "adapter": "main",
       "qvac": {
-        "sdk": "0.24.0",
-        "sdkGitHead": "1f559be4e208ee7e58e775bde4dd078263ca740c",
+        "sdk": "0.24.2",
+        "sdkGitHead": "9d48978649988e0488e4c6e8b394a970a40ffa6e",
         "cli": "0.20.0",
         "cliGitHead": "ee59035109a859ce29ff5e2ef4b115bb9113f4aa",
-        "sourceRef": "1f559be4e208ee7e58e775bde4dd078263ca740c",
+        "sourceRef": "9d48978649988e0488e4c6e8b394a970a40ffa6e",
         "delegatedPluginRpc": false
       },
       "gatewayProtocol": 1,
